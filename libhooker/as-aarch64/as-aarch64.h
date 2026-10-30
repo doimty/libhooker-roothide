@@ -70,6 +70,7 @@ enum TBZ_OPS {
 
 uint32_t assemble_mov(uint8_t sf, uint8_t op, uint8_t shift, uint8_t reg, uint16_t immediate);
 uint32_t assemble_br(uint8_t op, uint8_t reg, uint8_t reg_pacmod, uint8_t pactype);
+bool assemble_jmp_into(uint32_t *instrs, uint64_t targetAddr, bool link, uint8_t jmp_reg);
 uint32_t *assemble_jmp(uint64_t targetAddr, bool link, uint8_t jmp_reg);
 
 uint32_t assemble_cbz(uint8_t sf, uint8_t op, uint8_t reg, uint32_t offset);
