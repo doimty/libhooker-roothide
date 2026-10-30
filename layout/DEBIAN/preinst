@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# 原版插件目录迁移到 roothide 布局；遇到重名文件时保留原数据并中止。
+set -euo pipefail
+shopt -s dotglob nullglob
+
+abort() {
+    echo "libhooker: $*" >&2
+    exit 1
+}
+
+case "${1:-}" in install|upgrade) ;; *) exit 0 ;; esac
+OLDPATH=/Library/MobileSubstrate/DynamicLibraries
+NEWPATH=/usr/lib/TweakInject
+if [[ -e "$NEWPATH" && ! -d "$NEWPATH" ]]; then
+    abort 'TweakInject exists and is not a directory'
+fi
+mkdir -p "$NEWPATH"
+if [[ -L "$OLDPATH" ]]; then
+    [[ "$OLDPATH" -ef "$NEWPATH" ]] || abort 'DynamicLibraries points to an unexpected directory; migrate it first'
+    exit 0
+fi
+if [[ -d "$OLDPATH" ]]; then
+    files=("$OLDPATH"/*)
+    for file in "${files[@]}"; do
+        destination="$NEWPATH/${file##*/}"
+        [[ ! -e "$destination" && ! -L "$destination" ]] || abort "Refusing to overwrite $destination"
+    done
+    if (( ${#files[@]} )); then mv "${files[@]}" "$NEWPATH/"; fi
+    rmdir "$OLDPATH"
+elif [[ -e "$OLDPATH" ]]; then
+    abort 'DynamicLibraries exists and is not a directory'
+fi
+mkdir -p /Library/MobileSubstrate
+ln -s ../../usr/lib/TweakInject "$OLDPATH"

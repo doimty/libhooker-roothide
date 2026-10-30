@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 通知包管理器显示重启用户空间按钮，由用户在安装完成后触发。
+set -euo pipefail
+
+# 使用与 roothide ElleKit 相同的完成协议；无控制通道时保留文字提示。
+request_userspace_restart() {
+    local control_fd='' protocol='' extra=''
+    read -r control_fd protocol extra <<< "${CYDIA:-}"
+    [[ "$control_fd" =~ ^[0-9]+$ && "$protocol" == 1 && -z "$extra" ]] || return 0
+    # 通道关闭或不支持时，提示失败不能让已完成的安装变成配置失败。
+    (printf '%s\n' 'finish:usreboot' >&"$control_fd") 2>/dev/null || :
+}
+
+if [ "${1:-}" = configure ]; then
+    echo 'libhooker installed. Restart the userspace from your bootstrap/jailbreak app to activate.'
+    request_userspace_restart
+fi

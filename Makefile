@@ -1,6 +1,21 @@
+THEOS_PACKAGE_SCHEME ?= roothide
+THEOS_DEVICE_IP ?= 15
+FINALPACKAGE ?= 1
+
+ifeq ($(THEOS_PACKAGE_SCHEME),roothide)
+include roothide.mk
+else
+# 显式清空包方案时保留上游构建，避免混入 roothide 安装布局。
+override _THEOS_DEB_PACKAGE_CONTROL_PATH := $(CURDIR)/packaging/legacy-control
+THEOS_LAYOUT_DIR_NAME = packaging/legacy-layout
+override THEOS_LIBRARY_PATH := $(CURDIR)/worker/link-libraries
+export CLANG_MODULE_CACHE_PATH := $(CURDIR)/worker/clang-module-cache
 TARGET = iphone:latest:11.0
 ARCHS=arm64 arm64e
 include $(THEOS)/makefiles/common.mk
+
+# 这些运行时安装的第三方库不属于系统共享缓存，兼容新版 Apple 链接器。
+ADDITIONAL_LDFLAGS += -Wl,-not_for_dyld_shared_cache
 
 LIBRARY_NAME = libhooker libblackjack libsubstitute libsubstrate
 
@@ -31,3 +46,4 @@ libhookerTest_LDFLAGS = -lobjc
 libhookerTest_CODESIGN_FLAGS = -Sunittest/webcontent.xml
 
 include $(THEOS_MAKE_PATH)/tool.mk
+endif
