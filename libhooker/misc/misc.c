@@ -13,6 +13,7 @@ LIBHOOKER_EXPORT const char *LHVersion(void){
     return "libhooker 1.7.0. Copyright (C) 2022, CoolStar. All Rights Reserved.";
 }
 
+// 将公开错误码转换为稳定的说明文本。
 LIBHOOKER_EXPORT const char *LHStrError(enum LIBHOOKER_ERR err){
     switch (err) {
         case LIBHOOKER_OK:
@@ -28,6 +29,8 @@ LIBHOOKER_EXPORT const char *LHStrError(enum LIBHOOKER_ERR err){
             return "Virtual Memory Error";
         case LIBHOOKER_ERR_NO_SYMBOL:
             return "No symbol was specified for hooking";
+        case LIBHOOKER_ERR_ROLLBACK:
+            return "Memory rollback failed; patches may remain active";
         default:
             return "Unknown Error";
             break;

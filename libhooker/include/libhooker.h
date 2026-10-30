@@ -29,6 +29,7 @@ extern "C" {
 * @constant LIBHOOKER_ERR_BAD_INSN_AT_START A problematic instruction was found at the start. We can't preserve the original function due to this instruction getting clobbered.
 * @constant LIBHOOKER_ERR_VM An error took place while handling memory pages
 * @constant LIBHOOKER_ERR_NO_SYMBOL No symbol was specified for hooking
+* @constant LIBHOOKER_ERR_ROLLBACK 写入失败且无法确认完整恢复，部分补丁可能仍生效
 */
 enum LIBHOOKER_ERR {
     LIBHOOKER_OK = 0,
@@ -36,7 +37,8 @@ enum LIBHOOKER_ERR {
     LIBHOOKER_ERR_SHORT_FUNC = 2,
     LIBHOOKER_ERR_BAD_INSN_AT_START = 3,
     LIBHOOKER_ERR_VM = 4,
-    LIBHOOKER_ERR_NO_SYMBOL = 5
+    LIBHOOKER_ERR_NO_SYMBOL = 5,
+    LIBHOOKER_ERR_ROLLBACK = 6
 };
 
 /*!
@@ -171,6 +173,8 @@ struct LHMemoryPatch {
 * Sometimes low level memory access is required to hook parts of applications. This function
 * provides an easy way for libraries to do so, with a relatively safe guarantee of preserving
 * memory permissions, and re-mapping the memory if required.
+* 此原始内存接口不保证执行中多条指令替换的原子性；调用方须保证目标代码及仍可能返回到该范围的调用处于安全状态。
+* roothide 底层提交失败时尝试恢复原字节和权限；errno 为 LIBHOOKER_ERR_ROLLBACK 表示恢复未确认，禁止假定目标未改变。
 *
 * @param patches
 * A pointer to the destination to write to
