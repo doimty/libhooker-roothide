@@ -90,6 +90,7 @@ void LHCloseImage(struct libhooker_image *libhookerImage);
 * @discussion
 * dyld often is not able to find symbols that are present but not marked as public and/or exported.
 * Also often the dyld shared cache has symbols replaced with `<redacted>` when loaded into memory.
+* roothide 实现优先返回本镜像符号，随后允许显式 re-export，不搜索普通依赖；使用返回地址期间须保持镜像加载。
 *
 * @param libhookerImage
 * The libhooker handle to the image on disk or in the shared cache

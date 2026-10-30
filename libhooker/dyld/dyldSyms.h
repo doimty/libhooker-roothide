@@ -32,8 +32,16 @@ struct dyld_symbol_cache_info {
     uint64_t localSymbolsSize;
 };
 
+uintptr_t LHImageSlide(const void *image);
+
 struct libhooker_image *LHOpenImage(const char *path);
 void LHCloseImage(struct libhooker_image *libhookerImage);
+
+// 内部查询入口持有镜像引用；裸 header 只用于身份匹配，不能直接解引用。
+struct libhooker_image *LHOpenLoadedImage(const char *path);
+struct libhooker_image *LHOpenImageForHeader(const void *header);
+// 复制当次查询的路径；header 为空时包含全部镜像，调用者统一 free 返回值。
+char **LHCopyImagePaths(const void *header, size_t *count);
 
 bool LHFindSymbols(struct libhooker_image *libhookerImage,
                   const char **symbolNames,
