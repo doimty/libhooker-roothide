@@ -214,9 +214,12 @@ struct LHFunctionHookOptions {
 *
 * @field oldptr
 * If not null, this pointer gets written to with the address of a trampoline that lets you call the original function
+* roothide 实现准备失败或完整回滚后保留原值；回滚失败时保留跳板资源并设置 LIBHOOKER_ERR_ROLLBACK，入口和输出槽可能处于部分恢复状态。
+* 输出槽必须对齐、可读写，且不与本批补丁字节交叠；修改期间不能由其他补丁器或调用者并发改写。
 *
 * @discussion
 * Setting oldptr to null will allow libhooker to hook smaller functions and will skip over several checks since it does not need to try preserving the original function
+* roothide 实现沿用上游三指令入口；短函数或覆盖区内含调用时使用单指令兼容路径。准备失败不改写入口或 oldptr；调用方须保证函数只有该入口且不与其他补丁器并发改写。
 *
 * @field options
 * An optional field that may be populated with a pointer to an LHFunctionHookOptions struct

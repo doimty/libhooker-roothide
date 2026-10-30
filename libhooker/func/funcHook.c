@@ -6,295 +6,359 @@
 //  Copyright © 2020 CoolStar. All rights reserved.
 //
 
+// 保留上游独立跳板及通用重定位，按距离与函数长度选择入口。
 #include "funcHook.h"
+#include "funcMacros.h"
 #include "../as-aarch64/as-aarch64.h"
 #include "../disas-aarch64/disas-aarch64.h"
-#include "funcMacros.h"
 #include "../mem/writeMem.h"
 #include "../mem/shadowMem.h"
-#include <stdio.h>
-#include <string.h>
+#include "../mem/hook-transaction.h"
+#ifdef LH_ROOTHIDE
+#include "../mem/header-relay.h"
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#endif
 #include <errno.h>
-#include <sys/mman.h>
 #include <ptrauth.h>
+#include <string.h>
+#include <sys/mman.h>
 
-#if DEBUG
-#define PRINT_TRAMP 0
-#else
-#define PRINT_TRAMP 0
-#endif
-
-int LHHookFunction(void *symbol, void *hook, void **old, uint8_t jmp_reg){
-    if (!symbol){
-        return LIBHOOKER_ERR_NO_SYMBOL;
-    }
-    
-    struct disasm_reg_t *disasm_reg;
-    int disasm_entries;
-    LHGetDisasmRegistry(&disasm_reg, &disasm_entries);
-    
-    uint8_t disasmSize = 3;
-    uint8_t trampSize = 3;
-#define disasmEnd (disasmSize - 1)
-#define finalSize (disasmSize + 1)
-    
-    struct disasm_reg_t ret_entry = disasm_reg[0]; //first is always the ret instruction
-    uint32_t *start_op = (uint32_t *)ptrauth_strip(symbol, ptrauth_key_asia);
-    uint32_t *shadow_start_op = (uint32_t *)LHReadShadowMem((void *)start_op, disasmSize * sizeof(uint32_t));
-    uint32_t *end_op = start_op + disasmEnd;
-    if (!old){
-        disasmSize -= 1;
-        end_op = start_op + disasmEnd;
-    }
-    
-    uint32_t **final_ops = malloc(finalSize * sizeof(uint32_t *));
-    int *final_sizes = malloc(finalSize * sizeof(int));
-    uint64_t *pcs = malloc(disasmSize * sizeof(uint64_t));
-    rehandle_opcode *rewrite_handles = malloc(disasmSize * sizeof(rehandle_opcode));
-    uint64_t *target_adrs = malloc(disasmSize * sizeof(uint64_t));
-    
-    bzero(final_ops, finalSize * sizeof(uint32_t *));
-    bzero(final_sizes, finalSize * sizeof(int));
-    bzero(pcs, disasmSize * sizeof(uint64_t));
-    bzero(rewrite_handles, disasmSize * sizeof(void *));
-    bzero(target_adrs, disasmSize * sizeof(uint64_t));
-    
-    bool needsRehandle = false;
-    bool exitsAtTrampEnd = false;
-    
-    int i = 0;
-    for (uint32_t *op = end_op; op >= start_op; op--){
-        uint32_t instr = *((op - start_op) + shadow_start_op);
-        debugPrint("pc: %p, op: 0x%x\n", (void *)op, instr);
-        if (ret_entry.is_op(instr) || is_bExit(instr)){
-            if (op != end_op){
-                libhooker_dbgpanic("unexpected ret instruction! function too short?\n");
-                
-                free(shadow_start_op);
-                free(final_ops);
-                free(final_sizes);
-                free(pcs);
-                free(rewrite_handles);
-                free(target_adrs);
-                return LIBHOOKER_ERR_SHORT_FUNC;
-            } else {
-                exitsAtTrampEnd = true;
-            }
-        }
-        
-        if (old){
-            for (uint32_t j = 0; j < disasm_entries; j++){
-                if (disasm_reg[j].is_op(instr)){
-                    void *resulting_ops = disasm_reg[j].handle_op((uint64_t)op, instr, jmp_reg, &target_adrs[disasmEnd - i]);
-                    final_ops[disasmEnd - i] = resulting_ops;
-                    final_sizes[disasmEnd - i] = disasm_reg[j].tramp_size;
-                    pcs[disasmEnd - i] = (uint64_t)op;
-                    rewrite_handles[disasmEnd - i] = disasm_reg[j].rehandle_op;
-                    if (target_adrs[disasmEnd - i] >= (uint64_t)start_op && target_adrs[disasmEnd - i] <= (uint64_t)end_op){
-                        needsRehandle = true;
-                        debugPrint("Needs to rehandle instructions!\n");
-                    }
-                    break;
-                }
-            }
-        }
-        i++;
-    }
-    free(shadow_start_op);
-    
-    if (old){
-        uint64_t targetAddr = (uint64_t)(end_op + 1);
-        debugPrint("Target address: %p\n", (void *)targetAddr);
-        if (exitsAtTrampEnd){
-            uint32_t *nop_ptr = malloc(sizeof(uint32_t));;
-            *nop_ptr = assemble_nop();
-            final_ops[disasmSize] = nop_ptr;
-            final_sizes[disasmSize] = 0;
-        } else {
-            final_ops[disasmSize] = assemble_jmp(targetAddr, false, jmp_reg);
-            final_sizes[disasmSize] = JMPSIZ * sizeof(uint32_t);
-        }
-        
-        int final_size = 0;
-        for (int i = 0; i < finalSize; i++){
-            final_size += final_sizes[i];
-        }
-        debugPrint("Tramp size: %ld\n", final_size / sizeof(uint32_t));
-        uint32_t *tramp = malloc(final_size);
-        
-        uint32_t *trampptr = tramp;
-        for (int i = 0; i < finalSize; i++){
-            memcpy(trampptr, final_ops[i], final_sizes[i]);
-            trampptr += (final_sizes[i] / sizeof(uint32_t));
-        }
-        
-#if PRINT_TRAMP
-        for (int i = 0; i < final_size/sizeof(uint32_t); i++){
-            debugPrint("Tramp: 0x%x\n", tramp[i]);
-        }
-#endif
-        
-        int execSuccess = LHExecMemory(old, tramp, final_size);
-        if (needsRehandle){
-            LHMarkMemoryWriteable(*old);
-            for (int i = 0; i < disasmSize; i++){
-                if (target_adrs[i] > (uint64_t)start_op && target_adrs[i] <= (uint64_t)end_op){
-                    debugPrint("Needs rewrite: PC: %p, target: %p\n", (void *)pcs[i], (void *)target_adrs[i]);
-                    if (!rewrite_handles[i]){
-                        libhooker_dbgpanic("Unable to find rewrite handler for opcode!\n");
-                    }
-                    
-                    uint64_t offset = target_adrs[i] - pcs[i];
-                    uint64_t pcOff = pcs[i] - (uint64_t)start_op;
-                    for (int j = 0; j <= i; j++){
-                        offset -= sizeof(uint32_t);
-                        offset += final_sizes[j];
-                    }
-                    uint64_t newTarget = (uint64_t)*old + pcOff + offset;
-                    debugPrint("New target: %p\n", (void *)newTarget);
-                    
-                    uint32_t opcode = *((uint32_t *)pcs[i]);
-                    
-                    uint32_t *new_ops = rewrite_handles[i](opcode, jmp_reg, newTarget);
-                    uint64_t newPC = (uint64_t)*old + pcOff;
-                    memcpy((void *)newPC, new_ops, final_sizes[i]);
-                    free(new_ops);
-                }
-            }
-            LHMarkMemoryExecutable(*old);
-        }
-        *old = ptrauth_sign_unauthenticated(*old, 0, ptrauth_key_asia);
-        debugPrint("Writing old ptr: %p\n", (void *)*old);
-        free(tramp);
-        
-        for (int i = 0; i < finalSize; i++){
-            free(final_ops[i]);
-        }
-        free(final_ops);
-        free(final_sizes);
-        free(pcs);
-        free(rewrite_handles);
-        free(target_adrs);
-        
-        if (!execSuccess)
-            return LIBHOOKER_ERR_VM;
-    } else {
-        for (int i = 0; i < finalSize; i++){
-            free(final_ops[i]);
-        }
-        free(final_ops);
-        free(final_sizes);
-        free(pcs);
-        free(rewrite_handles);
-        free(target_adrs);
-    }
-    
-    uint64_t target_op = (uint64_t)ptrauth_strip(hook, ptrauth_key_asia);
-    uint64_t targetop_page = target_op & ~0xfff;
-#if __LP64__
-    uint64_t startop_page = (uint64_t)start_op & ~0xfff;
-    
-    bool useMMapWorkaround = false;
-    uint32_t movk_inst = assemble_nop();
-    if ((startop_page >> 33) != (targetop_page >> 33)){
-        debugPrint("WTF??? (Startop Page: %p, TargetOp Page: %p)\n", (void *)startop_page, (void *)targetop_page);
-        debugPrint("Attempting workaround...\n");
-        void *temp_tramp = mmap((void *)startop_page, 5 * sizeof(uint32_t), PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, 0, 0);
-        if (!temp_tramp){
-            libhooker_panic("Unable to map trampoline\n");
-            return LIBHOOKER_ERR_VM;
-        }
-        uint64_t new_op = (uint64_t)temp_tramp;
-        uint64_t new_page = new_op & ~0xfff;
-        debugPrint("Got intermediate trampoline: %p\n", (void *)temp_tramp);
-        if ((startop_page >> 33) != ((uint64_t)temp_tramp >> 33)){
-            debugPrint("AGAIN??? Wtf are you doing to me?\n");
-            if ((startop_page >> 48) == ((uint64_t)temp_tramp >> 48) && new_op == new_page){
-                debugPrint("OK there may be hope. Doing 2nd workaround.\n");
-                uint64_t bits = (new_op >> 32) & 0xffff;
-                movk_inst = assemble_mov(1, MOVK_OP, 32, jmp_reg, bits);
-                
-                new_op &= 0xffffffff;
-                new_op |= ((startop_page >> 32) & 0xffff) << 32;
-                new_page = new_op;
-                debugPrint("Temp page: %p\n", (void *)new_page);
-                useMMapWorkaround = true;
-            } else {
-                libhooker_panic("mmap failed!\n");
-                return LIBHOOKER_ERR_VM;
-            }
-        }
-        uint32_t *temp_jmp = assemble_jmp(target_op, false, jmp_reg);
-        memcpy(temp_tramp, temp_jmp, 5 * sizeof(uint32_t));
-        LHMarkMemoryExecutable(temp_tramp);
-        free(temp_jmp);
-        target_op = new_op;
-        targetop_page = new_page;
-    }
-#endif
-    
-    uint32_t adrp_inst = assemble_adrp((uint64_t)start_op, jmp_reg, targetop_page);
-    uint32_t add_inst = assemble_add(jmp_reg, jmp_reg, (uint32_t)(target_op - targetop_page));
-    uint32_t *replacement_instrs = malloc(trampSize * sizeof(uint32_t));
-    for (int i = 0; i < trampSize; i++){
-        replacement_instrs[i] = assemble_nop();
-    }
-    replacement_instrs[0] = adrp_inst;
-#if __LP64__
-    if (!useMMapWorkaround)
-        replacement_instrs[1] = add_inst;
-    else
-        replacement_instrs[1] = movk_inst;
-#else
-    replacement_instrs[1] = add_inst;
-#endif
-    replacement_instrs[2] = assemble_br(BR_OP, jmp_reg, 0, PAC_NONE);
-    
-    #if PRINT_TRAMP
-    for (int i = 0; i < trampSize; i++){
-        debugPrint("Repl Inst: 0x%x\n", replacement_instrs[i]);
-    }
-    #endif
-    if (!LHWriteMemoryInternal(start_op, replacement_instrs, trampSize * sizeof(uint32_t))){
-        free(replacement_instrs);
-        return LIBHOOKER_ERR_VM;
-    }
-    free(replacement_instrs);
-    return LIBHOOKER_OK;
+// 识别不再顺序执行下一条指令的出口。
+static bool LHEndsBlock(uint32_t opcode, const struct disasm_reg_t *registry) {
+    return registry[0].is_op(opcode) || is_bExit(opcode) ||
+        (opcode & 0xfffffc1f) == 0xd61f0000 ||
+        (opcode & 0xfffff81f) == 0xd61f081f ||
+        (opcode & 0xfffff800) == 0xd71f0800;
 }
 
+// 只有控制流目标才随被覆盖的原指令移动，取址指令保留原地址。
+static bool LHIsBranch(uint32_t opcode) {
+    return (opcode & 0x7c000000) == 0x14000000 ||
+        (opcode & 0x7e000000) == 0x34000000 ||
+        (opcode & 0x7e000000) == 0x36000000 ||
+        (opcode & 0xff000010) == 0x54000000;
+}
 
-LIBHOOKER_EXPORT int LHHookFunctions(const struct LHFunctionHook *hooks, int count){
-    int successHook = 0;
-    errno = 0;
-    for (int i = 0; i < count; i++){
-#if __APPLE__
-        uint8_t jmpreg = 16;
-#else
-        uint8_t jmpreg = 18; //risky but ld.so uses x16 and x17
+// 前缀内调用可把返回地址保存到深层栈中，不能用多指令入口覆盖它。
+static bool LHIsCall(uint32_t opcode) {
+    return (opcode & 0xfc000000) == 0x94000000 ||
+        (opcode & 0xfffffc1f) == 0xd63f0000 ||
+        (opcode & 0xfffff81f) == 0xd63f081f ||
+        (opcode & 0xfffff800) == 0xd73f0800;
+}
+
+// 避免回跳覆盖前缀刚生成的 IP 值；自定义寄存器仍由调用方选择。
+static uint8_t LHRelocationRegister(const uint32_t *instructions, size_t count, uint8_t requested) {
+    if (requested != 16 && requested != 17) return requested;
+    uint32_t used = 0;
+    for (size_t i = 0; i < count; i++) {
+        uint32_t opcode = instructions[i];
+        // 这些指令的隐式操作数不能从常规寄存器字段推断。
+        if ((opcode & ~0xc0U) == 0xd503211f ||
+                (opcode & 0xbfa07c00U) == 0x08207c00U ||
+                (opcode & 0xffffbc00U) == 0xf83f9000U ||
+                (opcode & 0xffe0ec00U) == 0xf820a000U || LHIsCall(opcode)) return 31;
+        if ((opcode & 0x7c000000) == 0x14000000 || (opcode & 0xff000010) == 0x54000000) continue;
+        if ((opcode & 0x1f000000) == 0x10000000 || (opcode & 0x3b000000) == 0x18000000 ||
+                (opcode & 0x1f800000) == 0x12800000 ||
+                (opcode & 0x7e000000) == 0x34000000 || (opcode & 0x7e000000) == 0x36000000) {
+            used |= 1U << (opcode & 31);
+        } else {
+            used |= (1U << (opcode & 31)) | (1U << ((opcode >> 5) & 31)) |
+                (1U << ((opcode >> 10) & 31)) | (1U << ((opcode >> 16) & 31));
+        }
+    }
+    if (!(used & (1U << requested))) return requested;
+    uint8_t alternate = requested == 16 ? 17 : 16;
+    return used & (1U << alternate) ? 31 : alternate;
+}
+
+#ifdef LH_ROOTHIDE
+// 隐式 IP 或私有调用入口必须保留全部寄存器，只为这类兼容情况创建独立近页。
+static int LHBuildSensitiveOriginal(uintptr_t target, uint32_t opcode, struct LHHookResources *resources) {
+    // 此兼容路径只重编码 B/BL，其余 PC 相对指令必须交给通用重定位器。
+    if ((opcode & 0x1f000000) == 0x10000000 || (opcode & 0x3b000000) == 0x18000000 ||
+            (LHIsBranch(opcode) && (opcode & 0x7c000000) != 0x14000000)) return LIBHOOKER_ERR_BAD_INSN_AT_START;
+    uintptr_t lower = target > 0x7fffffc ? target - 0x7fffffc : PAGE_SIZE;
+    uintptr_t upper = target < UINTPTR_MAX - 0x8000000 ? target + 0x8000000 : UINTPTR_MAX;
+    uintptr_t destination = 0;
+    bool branch = (opcode & 0x7c000000) == 0x14000000;
+    if (branch) {
+        int64_t displacement = opcode & 0x3ffffff;
+        if (displacement & 0x2000000) displacement -= 0x4000000;
+        destination = target + displacement * 4;
+        uintptr_t start = destination > 0x7fffffc ? destination - 0x7fffffc : PAGE_SIZE;
+        uintptr_t end = destination < UINTPTR_MAX - 0x8000000 ? destination + 0x8000000 : UINTPTR_MAX;
+        if (start > lower) lower = start;
+        if (end < upper) upper = end;
+    }
+    mach_vm_address_t address = (lower + PAGE_MASK) & ~PAGE_MASK;
+    if (address > upper || mach_vm_map(mach_task_self(), &address, PAGE_SIZE, 0, VM_FLAGS_ANYWHERE,
+            MACH_PORT_NULL, 0, false, VM_PROT_READ | VM_PROT_WRITE,
+            VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE, VM_INHERIT_NONE) != KERN_SUCCESS) return LIBHOOKER_ERR_VM;
+    if (address > upper) { mach_vm_deallocate(mach_task_self(), address, PAGE_SIZE); return LIBHOOKER_ERR_VM; }
+    uint32_t *code = (void *)address;
+    code[0] = branch ? (opcode & 0xfc000000) | (((destination - address) / 4) & 0x3ffffff) : opcode;
+    code[1] = 0x14000000 | (((target - address) / 4) & 0x3ffffff);
+    if (!LHMarkMemoryExecutable(code)) { mach_vm_deallocate(mach_task_self(), address, PAGE_SIZE); return LIBHOOKER_ERR_VM; }
+    resources->trampoline = code;
+    resources->original = ptrauth_sign_unauthenticated(code, ptrauth_key_function_pointer, 0);
+    return LIBHOOKER_OK;
+}
 #endif
-#if TARGET_OS_IOS && __LP64__
-        uint8_t legacyOptions = ((uintptr_t)hooks[i].options) & 0xf;
-        if (legacyOptions & LHOptionsSetJumpReg){
-            struct LHFunctionHookOld *oldhook = (struct LHFunctionHookOld *)&hooks[i];
-            jmpreg = oldhook->jmp_reg;
-        } else
+
+// 按上游分配式接口逐条重定位，内部跳转使用实际输出长度计算位置。
+static int LHBuildOriginal(uintptr_t target, const uint32_t *instructions, size_t count,
+        uint8_t requested, struct LHHookResources *resources) {
+    struct disasm_reg_t *registry;
+    int registryCount;
+    LHGetDisasmRegistry(&registry, &registryCount);
+    uint8_t reg = LHRelocationRegister(instructions, count, requested);
+    if (reg >= 31) {
+        bool needsScratch = !LHEndsBlock(instructions[count - 1], registry);
+        for (size_t i = 0; i < count; i++) needsScratch |= LHIsBranch(instructions[i]) || LHIsCall(instructions[i]);
+        if (!needsScratch) reg = requested;
+#ifdef LH_ROOTHIDE
+        else if (count == 1) return LHBuildSensitiveOriginal(target, instructions[0], resources);
 #endif
-        if (hooks[i].options){
-            const struct LHFunctionHookOptions *options = hooks[i].options;
-            if (options->options & LHOptionsSetJumpReg){
-                jmpreg = options->jmp_reg;
+        else return LIBHOOKER_ERR_BAD_INSN_AT_START;
+    }
+    uint32_t *pieces[4] = {0};
+    size_t sizes[4] = {0}, offsets[4] = {0};
+    uint64_t destinations[3] = {0};
+    const struct disasm_reg_t *handlers[3] = {0};
+    size_t total = 0;
+    int result = LIBHOOKER_ERR_BAD_INSN_AT_START;
+    void *buffer = NULL;
+    for (size_t i = 0; i < count; i++) {
+        uint32_t opcode = instructions[i];
+        // 零寄存器不能暂存 literal load 或 ADR 的目标地址。
+        if (((opcode & 0x3b00001f) == 0x1800001f && (opcode >> 30) != 3) ||
+                (opcode & 0x1f00001f) == 0x1000001f) goto done;
+        for (int j = 0; j < registryCount; j++) {
+            if (registry[j].is_op(opcode)) { handlers[i] = &registry[j]; break; }
+        }
+        if (!handlers[i] || !handlers[i]->tramp_size || !handlers[i]->handle_op) goto done;
+        pieces[i] = handlers[i]->handle_op(target + i * 4, opcode, reg, &destinations[i]);
+        if (!pieces[i]) { result = LIBHOOKER_ERR_VM; goto done; }
+        sizes[i] = handlers[i]->tramp_size;
+        offsets[i] = total;
+        total += sizes[i];
+        // 拒绝读取将被改写的指令字节，包括从入口前方跨入的 literal。
+        if ((opcode & 0x3b000000) == 0x18000000 && (opcode >> 30) != 3) {
+            size_t width = (opcode >> 30) == 1 ? 8 : 4;
+            if (destinations[i] <= target ? target - destinations[i] < width :
+                    destinations[i] - target < count * 4) goto done;
+        }
+    }
+    if (!LHEndsBlock(instructions[count - 1], registry)) {
+        pieces[count] = assemble_jmp(target + count * 4, false, reg);
+        if (!pieces[count]) { result = LIBHOOKER_ERR_VM; goto done; }
+        sizes[count] = JMPSIZ * 4;
+        offsets[count] = total;
+        total += sizes[count];
+    }
+    buffer = malloc(total);
+    if (!buffer) { result = LIBHOOKER_ERR_VM; goto done; }
+    for (size_t i = 0; i <= count; i++)
+        if (sizes[i]) memcpy((uint8_t *)buffer + offsets[i], pieces[i], sizes[i]);
+    if (!LHExecMemory(&resources->trampoline, buffer, total)) { result = LIBHOOKER_ERR_VM; goto done; }
+    // 已知实际跳板地址后重写内部目标；整个原调用发布前完成权限恢复。
+    bool writable = false;
+    for (size_t i = 0; i < count; i++) {
+        if (!LHIsBranch(instructions[i]) || destinations[i] < target || destinations[i] - target >= count * 4) continue;
+        if ((destinations[i] - target) & 3 || !handlers[i]->rehandle_op) goto done;
+        size_t destinationIndex = (destinations[i] - target) / 4;
+        uint32_t *rewritten = handlers[i]->rehandle_op(instructions[i], reg,
+            (uintptr_t)resources->trampoline + offsets[destinationIndex]);
+        if (!rewritten) { result = LIBHOOKER_ERR_VM; goto done; }
+        if (!writable && !LHMarkMemoryWriteable(resources->trampoline)) {
+            free(rewritten); result = LIBHOOKER_ERR_VM; goto done;
+        }
+        writable = true;
+        memcpy((uint8_t *)resources->trampoline + offsets[i], rewritten, sizes[i]);
+        free(rewritten);
+    }
+    if (writable && !LHMarkMemoryExecutable(resources->trampoline)) { result = LIBHOOKER_ERR_VM; goto done; }
+    resources->original = ptrauth_sign_unauthenticated(resources->trampoline, ptrauth_key_function_pointer, 0);
+    result = LIBHOOKER_OK;
+done:
+    for (size_t i = 0; i < 4; i++) free(pieces[i]);
+    free(buffer);
+    return result;
+}
+
+// 精确检查 ADRP 的正负四 GiB 范围。
+static bool LHCanAddressPage(uintptr_t source, uintptr_t destination) {
+    source &= ~(uintptr_t)0xfff;
+    destination &= ~(uintptr_t)0xfff;
+    return destination >= source ? destination - source < 0x100000000ULL : source - destination <= 0x100000000ULL;
+}
+
+#ifdef LH_ROOTHIDE
+// 精确检查单条 B 指令的正负 128 MiB 范围。
+static bool LHCanBranch(uintptr_t source, uintptr_t destination) {
+    return destination >= source ? destination - source <= 0x7fffffcULL : source - destination <= 0x8000000ULL;
+}
+
+// 短函数需要时单独申请近页，不与其他 Hook 共享页或复用槽位。
+static bool LHCreateShortRelay(uintptr_t target, const uint32_t *jump, void **relay) {
+    uintptr_t lower = target > 0x7ff0000 ? target - 0x7ff0000 : PAGE_SIZE;
+    mach_vm_address_t address = (lower + PAGE_MASK) & ~PAGE_MASK;
+    if (mach_vm_map(mach_task_self(), &address, PAGE_SIZE, 0, VM_FLAGS_ANYWHERE, MACH_PORT_NULL, 0, false,
+            VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE, VM_INHERIT_NONE) != KERN_SUCCESS) return false;
+    if (LHCanBranch(target, address)) {
+        memcpy((void *)address, jump, JMPSIZ * 4);
+        if (LHMarkMemoryExecutable((void *)address)) { *relay = (void *)address; return true; }
+    }
+    mach_vm_deallocate(mach_task_self(), address, PAGE_SIZE);
+    return false;
+}
+#endif
+
+// 近距离入口优先单条直跳；远距离沿用三条指令及独立中继。
+int LHHookFunction(void *symbol, void *hook, void **old, uint8_t reg) {
+    if (!symbol || !hook) return LIBHOOKER_ERR_NO_SYMBOL;
+    uintptr_t target = (uintptr_t)ptrauth_strip(symbol, ptrauth_key_function_pointer);
+    uintptr_t replacement = (uintptr_t)ptrauth_strip(hook, ptrauth_key_function_pointer);
+    if ((target | replacement) & 3 || reg >= 31 || target == replacement) return LIBHOOKER_ERR_BAD_INSN_AT_START;
+    struct disasm_reg_t *registry;
+    int registryCount;
+    LHGetDisasmRegistry(&registry, &registryCount);
+    uint32_t original[3], patch[3];
+    size_t count = 3;
+    // 逐条读取，在出口停止，避免短函数位于页尾时越过未知映射。
+    for (size_t i = 0; i < 3; i++) {
+        uintptr_t address = target + i * sizeof(uint32_t);
+        // 已对齐的单条指令不会跨页，直接读取快照即可省去临时堆分配。
+        if (!address || sizeof(uint32_t) > UINTPTR_MAX - address ||
+                !LHCopyMemPage(&original[i], address & ~PAGE_MASK, address & PAGE_MASK,
+                    sizeof(original[i]))) return LIBHOOKER_ERR_VM;
+#ifdef LH_ROOTHIDE
+        if (LHIsCall(original[i])) { count = 1; break; }
+#endif
+        if (LHEndsBlock(original[i], registry)) { if (i < 2) count = 1; break; }
+    }
+#ifdef LH_ROOTHIDE
+    // 未终止的前缀若没有可借用的 IP，缩小覆盖范围以保留后续寄存器语义。
+    if (count == 3 && LHRelocationRegister(original, count, reg) >= 31 && !LHEndsBlock(original[2], registry)) count = 1;
+#endif
+#ifndef LH_ROOTHIDE
+    if (count == 1) return LIBHOOKER_ERR_SHORT_FUNC;
+#endif
+    struct LHHookResources *resources = calloc(1, sizeof(*resources));
+    if (!resources) return LIBHOOKER_ERR_VM;
+    resources->oldptr = old;
+    resources->target = target;
+    int result = LIBHOOKER_ERR_VM;
+    uint32_t jump[JMPSIZ];
+#ifdef LH_ROOTHIDE
+    struct LHHeaderRelay *headerRelay = NULL;
+    uintptr_t headerAddress = 0;
+    bool headerStaged = false;
+#endif
+    // 先准备原函数，错误指令不会被中继分配失败掩盖。
+    if (old) {
+        result = LHBuildOriginal(target, original, count, reg, resources);
+        if (result != LIBHOOKER_OK) goto done;
+    }
+#ifdef LH_ROOTHIDE
+    // 保留原调用的完整重定位前缀，仅缩小入口改写，避免提前回跳破坏 IP 寄存器。
+    if (LHCanBranch(target, replacement)) count = 1;
+#endif
+    resources->patchSize = count * sizeof(uint32_t);
+    result = LIBHOOKER_ERR_VM;
+#ifdef LH_ROOTHIDE
+    if (count == 1) {
+        uintptr_t destination = replacement;
+        if (!LHCanBranch(target, replacement)) {
+            if (!assemble_jmp_into(jump, replacement, false, reg)) goto done;
+            if (LHCreateShortRelay(target, jump, &resources->relay)) destination = (uintptr_t)resources->relay;
+            else {
+                headerRelay = LHPrepareHeaderRelay(target, JMPSIZ * 4, &headerAddress);
+                if (!headerRelay) goto done;
+                destination = headerAddress;
             }
         }
-        int funcRet = LHHookFunction(hooks[i].function, hooks[i].replacement, hooks[i].oldptr, jmpreg);
-        if (funcRet == LIBHOOKER_OK)
-            successHook++;
-        else
-            errno = funcRet;
+        patch[0] = 0x14000000 | (((destination - target) / 4) & 0x3ffffff);
+    } else
+#endif
+    {
+        uintptr_t destination = replacement;
+        bool useMovk = false;
+        if (!LHCanAddressPage(target, replacement)) {
+            if (!assemble_jmp_into(jump, replacement, false, reg) ||
+                    !LHExecMemory(&resources->relay, jump, JMPSIZ * 4)) goto done;
+            destination = (uintptr_t)resources->relay;
+            if (!LHCanAddressPage(target, destination)) {
+                // 中继按页对齐，用 MOVK 修正高 16 位，保留上游三指令入口。
+                if ((target >> 48) != (destination >> 48) || (destination & 0xfff)) goto done;
+                useMovk = true;
+                destination = (target & ~0xffffffffULL) | (destination & 0xffffffffULL);
+            }
+        }
+        patch[0] = assemble_adrp(target, reg, destination & ~(uintptr_t)0xfff);
+        patch[1] = useMovk ? assemble_mov(1, MOVK_OP, 32, reg, ((uintptr_t)resources->relay >> 32) & 0xffff) :
+            assemble_add(reg, reg, destination & 0xfff);
+        patch[2] = assemble_br(BR_OP, reg, 0, PAC_NONE);
     }
-    if (!LHCommitShadowPages()){
-        debugPrint("Unable to commit shadow pages... Unknown how many succeeded\n");
-        return 0;
+#ifdef LH_ROOTHIDE
+    if (headerRelay) {
+        if (!LHPrepareShadowPage(target & ~PAGE_MASK) || !LHPrepareShadowPage(headerAddress & ~PAGE_MASK) ||
+                !LHWriteMemoryInternal((void *)headerAddress, jump, JMPSIZ * 4)) goto done;
+        headerStaged = true;
     }
-    return successHook;
+#endif
+    if (!LHWriteMemoryInternal((void *)target, patch, count * 4)) goto done;
+#ifdef LH_ROOTHIDE
+    LHQueueHookResources(resources);
+#else
+    if (old) *old = resources->original;
+    free(resources);
+#endif
+    resources = NULL;
+    result = LIBHOOKER_OK;
+done:
+    if (resources) {
+        if (resources->trampoline) munmap(resources->trampoline, PAGE_SIZE);
+        if (resources->relay) munmap(resources->relay, PAGE_SIZE);
+        free(resources);
+    }
+#ifdef LH_ROOTHIDE
+    if (headerRelay && !headerStaged) LHCancelHeaderRelay(headerRelay);
+#endif
+    return result;
+}
+
+// 整批 Hook 共用影子事务锁，失败向调用方返回真实状态。
+LIBHOOKER_EXPORT int LHHookFunctions(const struct LHFunctionHook *hooks, int count) {
+    if (!hooks || count < 0) { errno = LIBHOOKER_ERR_NO_SYMBOL; return 0; }
+    LHLockMemory();
+    int success = 0;
+    errno = 0;
+    for (int i = 0; i < count; i++) {
+#if __APPLE__
+        int reg = 16;
+#else
+        int reg = 18;
+#endif
+        if (hooks[i].options) {
+#if TARGET_OS_IOS && __LP64__
+            if ((uintptr_t)hooks[i].options & LHOptionsSetJumpReg) {
+                const struct LHFunctionHookOld *legacy = (const void *)&hooks[i];
+                reg = legacy->jmp_reg;
+            } else
+#endif
+            if (hooks[i].options->options & LHOptionsSetJumpReg) reg = hooks[i].options->jmp_reg;
+        }
+        int result = reg < 0 || reg >= 31 ? LIBHOOKER_ERR_BAD_INSN_AT_START :
+            LHHookFunction(hooks[i].function, hooks[i].replacement, hooks[i].oldptr, reg);
+        if (result == LIBHOOKER_OK) success++; else errno = result;
+    }
+    if (!LHCommitShadowPages()) success = 0;
+    int commitError = errno;
+    LHUnlockMemory();
+    errno = commitError;
+    return success;
 }
