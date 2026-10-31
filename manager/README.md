@@ -47,14 +47,15 @@ userspace reboot. Running processes do not reload these settings live.
 
 ### Build on macOS
 
-Use Xcode with its command-line tools, `ldid`, `dpkg-deb`, the pinned RootHide
-Theos checkout `88506b2` including its submodules, and the iPhoneOS 17.3.1 SDK.
-The build does not download tools, sign with Apple credentials, install packages,
-or operate a device.
+Use Xcode with its command-line tools, `ldid`, `dpkg-deb`, and the pinned RootHide
+Theos checkout `88506b2` including its submodules. The UIKit app uses the selected
+Xcode's platform iPhoneOS SDK with deployment target 15.0; it does not use the
+patched SDK intended for Theos engine builds. The build does not download tools,
+sign with Apple credentials, install packages, or operate a device.
 
 ```sh
 export THEOS=/absolute/path/to/roothide-theos
-export LHC_SDK="$THEOS/sdks/iPhoneOS17.3.1.sdk"
+export LHC_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 bash tests/run.sh
 make -f build-roothide.mk package
 ```

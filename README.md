@@ -12,6 +12,20 @@ make do
 
 包信息位于 `control`，安装布局与维护脚本位于 `layout/`。
 
+## 可选进程管理器
+
+`manager/` 是基于 CoolStar libhooker Configurator 适配的独立附加包，支持按应用、SpringBoard 和后台进程启停插件，以及每进程插件允许/禁止列表。需要配置协议已接入的引擎 `1.6.9-23+roothide` 或更新版本；原先已验证正常的22版不读取这些设置。
+
+```sh
+bash manager/tests/run.sh
+make -C manager -f build-roothide.mk package
+python3 scripts/verify-configurator-package.py manager/packages/org.coolstar.libhooker-configurator_1.4+roothide.1_iphoneos-arm64e.deb
+```
+
+附加包输出位于 `manager/packages/`，不与引擎合包。设置自动保存，在目标进程下次启动时生效；管理器不会自动触发重启，也不安装旧的提权助手。App 使用 Xcode 自带 iOS SDK 并部署到15.0，底层引擎继续使用 `build-config.mk` 固定的 Theos SDK。配置协议和验证范围见 [集成说明](docs/configurator-roothide.md)。
+
+This product includes software developed by CoolStar. 原管理器许可证完整保留于 `manager/LICENSE`，此附加包仅面向 Procursus 基础环境的 RootHide。
+
 需要使用原上游构建方式时，执行 `make clean THEOS_PACKAGE_SCHEME=`，再执行 `make package THEOS_PACKAGE_SCHEME=`。
 
 ## iOS 15 兼容候选
@@ -47,7 +61,7 @@ make do
 python3 tests/test-ios15-packaging.py
 bash scripts/test-host.sh
 make package
-python3 scripts/verify-package.py packages/org.coolstar.libhooker_1.6.9-22+roothide_iphoneos-arm64e.deb
+python3 scripts/verify-package.py packages/org.coolstar.libhooker_1.6.9-23+roothide_iphoneos-arm64e.deb
 bash scripts/build-device-rollback.sh
 bash scripts/build-device-image-lookup.sh
 ```
