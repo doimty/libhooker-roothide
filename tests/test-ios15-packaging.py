@@ -100,10 +100,13 @@ class IOS15Packaging(unittest.TestCase):
             self.assertEqual(framework.resolve(strict=True), (library / f"{engine}.dylib").resolve())
             self.assertTrue((library / "TweakInject").is_dir())
             self.assertFalse((library / f"{engine}.a").exists())
+            # macOS 上 TMPDIR 位于 /var/folders，realpath 会解析成 /private/var，
+            # 因此基准目录也必须先解析，否则所有合法相对链接都会被误判为越界。
+            resolved_stage = stage.resolve()
             for path in stage.rglob("*"):
                 if path.is_symlink():
                     self.assertFalse(os.path.isabs(os.readlink(path)), str(path))
-                    self.assertTrue(path.resolve(strict=True).is_relative_to(stage))
+                    self.assertTrue(path.resolve(strict=True).is_relative_to(resolved_stage))
 
     def test_libjoker_real_stage(self):
         self.check_stage("libjoker")
