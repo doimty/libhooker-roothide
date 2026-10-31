@@ -410,15 +410,15 @@ static void test_snapshot_ownership_and_immutability(void) {
     CHECK(bundle && path);
     LHConfigPolicy policy = LHConfigPolicyCreate(value.preferences, bundle, path);
     CFDictionaryRemoveAllValues(list);
-    CFStringSetString(name, CFSTR("Changed.dylib"));
+    CFStringReplaceAll(name, CFSTR("Changed.dylib"));
     CFDictionarySetValue(list, CFSTR("Alpha.dylib"), kCFBooleanFalse);
     CFDictionarySetValue(list, CFSTR("Beta.dylib"), kCFBooleanTrue);
     CFDictionarySetValue(value.preferences, CFSTR("tweaksEnabled"), kCFBooleanFalse);
     CFDictionarySetValue(value.defaults, CFSTR("enableTweaks"), kCFBooleanFalse);
     CFDictionarySetValue(value.defaults, CFSTR("customConfig"), kCFBooleanFalse);
     set_int(value.defaults, CFSTR("allowDeny"), 1);
-    CFStringSetString(bundle, CFSTR("com.apple.WebKit.WebContent"));
-    CFStringSetString(path, CFSTR("WebKit.WebContent"));
+    CFStringReplaceAll(bundle, CFSTR("com.apple.WebKit.WebContent"));
+    CFStringReplaceAll(path, CFSTR("WebKit.WebContent"));
     CFRelease(name);
     CFRelease(bundle);
     CFRelease(path);
