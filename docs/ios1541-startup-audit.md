@@ -54,6 +54,20 @@ Configurator's disable setting gates the plugin scan after RootHide infrastructu
 
 Dopamine's RootHide blacklist is evaluated earlier at process spawn and can select a separate non-injection path. This fork's optional executable whitelist can alter blacklist precedence (`libroothider/src/blacklist.m`); a GUI cannot promise isolation by changing only the Configurator plist. Any integration with RootHide app isolation must be a separate explicit feature with fresh-process verification. No library enumeration is falsified by this patch.
 
+## New evidence: RootHide dyld fix / Spinlock Fix enabled
+
+The user subsequently confirmed that the friend enabled this setting. This is an important environment dimension, not proof of which component failed.
+
+- The user flag `dyld_patch_enabled` is stored through the jailbreak server; on iOS15 arm64e it also updates `spinlockFixApplied`. The UI applies a live flag change together with an explicit userspace reboot.
+- `roothide_patch_proc()` selects `proc_patch_dyld()` when enabled, otherwise the code-signing-flags path (apart from forced per-process cases). The patched dyld is generated from the device's own `/usr/lib/dyld`: AMFI flags and UUID are changed and the architecture/OS hook is merged. It does not upgrade the device to another dyld version.
+- The iOS15 arm64e shared-cache hook calls the original loadDyldCache and then remaps executable mappings, including supported numbered subcaches, using MAP_FIXED | MAP_PRIVATE at the same address plus slide. This does not itself alter dyld's fork API contract or rewrite the private-symbol table format.
+- `dyld_patch_fallback_enabled` is a different per-process observation, based on whether the patched-dyld jbinfo/check-in is available. It is not simply the inverse of the user's setting. Fallback NOLOAD wrappers skip trust work and tail-call native dyld with the same flags.
+- RootHide's original warning explicitly states that full-blacklisted apps on iOS15 arm64e with Spinlock Fix can lose extension/prewarm functionality and can still cause spinlock panics. This is a documented tradeoff, not evidence of a libhooker crash. A Choicy/plugin-disable state is not equivalent to full RootHide blacklist isolation.
+
+The confirmed fork-SPI defect remains relevant with the patch enabled because the patched dyld is based on the installed native dyld and does not remove the later fork-state semantics. Its exact occurrence, and any separate private-mapping/Hook failure, still requires the friend's actual logs. Existing on/off observations are useful if already available; no further toggle/reboot experiment was performed here.
+
+Source anchors in Dopamine `c2b9cfe`: `libjailbreak/src/basebin_gen.m:38-87,145-154`, `libroothider/src/common.m:229-263`, `libroothider/src/dyld_patch.m:593-608,631-690,731-791`, `dyldhook/src/spinlock_fix.c:18-76,88-101,128-145`, `systemhook/src/roothider_main.c:397-422,604-629`, `launchdhook/src/roothider.m:522-568`, `Application/Dopamine/UI/Settings/DOSettingsController.m:848-895`.
+
 ## Needed to attribute and validate iOS15.4.1
 
 Collect the first failure's launchd/panic report if present, otherwise SpringBoard/backboardd/watchdog report or a hang sample, plus machine ID and Dopamine/basebin version. A dyld error mentioning fork handlers would directly confirm the source defect path. If SpringBoard remains alive, scene/safety-marker and tweak/manager loading data distinguish a loader problem from missing recovery UI. Do not request another reboot solely to guess a cause when existing reports can establish it.
