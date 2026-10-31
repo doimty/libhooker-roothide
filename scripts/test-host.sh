@@ -26,3 +26,9 @@ worker/host-tests/symbol-cache
 xcrun clang "${common[@]}" tests/image-lookup.c libhooker/dyld/macho-symbols.c \
     -o worker/host-tests/image-lookup
 worker/host-tests/image-lookup
+xcrun clang "${common[@]}" tests/config-policy.c injector/config-policy.c \
+    -framework CoreFoundation -o worker/host-tests/config-policy
+worker/host-tests/config-policy
+xcrun clang "${common[@]}" tests/injector-config.c injector/config-policy.c \
+    -framework CoreFoundation -lobjc -o worker/host-tests/injector-config
+worker/host-tests/injector-config

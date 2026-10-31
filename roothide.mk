@@ -28,7 +28,7 @@ $(LH_ENGINE_NAME)_CCFLAGS = $(LH_FLAGS) -std=c++11
 $(LH_ENGINE_NAME)_LDFLAGS = -lobjc
 $(LH_ENGINE_NAME)_LINKAGE_TYPE = both
 
-libinjector_FILES = injector/injector.c
+libinjector_FILES = injector/injector.c injector/config-policy.c
 libinjector_CFLAGS = -Ilibhooker/include
 libinjector_FRAMEWORKS = CoreFoundation
 libinjector_LDFLAGS = -lobjc -lroothide -Wl,-needed_library,$(THEOS_OBJ_DIR)/$(LH_ENGINE_NAME).dylib

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - fix/ios15-roothide-20261031
+      - feature/configurator-roothide
     paths:
       - '.github/workflows/**'
       - 'Makefile'
@@ -19,6 +20,7 @@ on:
       - 'compat/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'manager/**'
 
 permissions:
   contents: read

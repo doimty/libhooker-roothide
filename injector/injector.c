@@ -2,6 +2,7 @@
 // Copyright 2022 © Charlotte Belanger
 
 #include "injector.h"
+#include "config-policy.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,8 +18,13 @@
 #include <dlfcn.h>
 #include <os/log.h>
 #include <mach-o/dyld.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_OSX
 #include <roothide/roothide.h>
+#endif
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #if LH_TESTING
 // 隔离回归仅扫描测试目录，不读取或加载宿主机插件。
@@ -30,11 +36,55 @@
 #endif
 #define MAX_TWEAKMANAGERS 20
 #define MAX_TWEAKS 1000
+#if LH_TESTING
+#define CONFIGURATION_PATH getenv("LH_TEST_CONFIGURATION_PATH")
+#elif TARGET_OS_OSX
+#define CONFIGURATION_PATH "/var/mobile/Library/Preferences/org.coolstar.libhooker.plist"
+#else
+#define CONFIGURATION_PATH jbroot("/var/mobile/Library/Preferences/org.coolstar.libhooker.plist")
+#endif
+#define MAX_CONFIGURATION_BYTES (4 * 1024 * 1024)
+
+// 缺失或损坏的配置保留已有行为；读取一次快照，后续插件不会改写当前筛选结果。
+static CFDictionaryRef read_configuration(void) {
+    const char *path = CONFIGURATION_PATH;
+    if (!path || !*path) return NULL;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return NULL;
+    struct stat info;
+    if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0 ||
+        info.st_size > MAX_CONFIGURATION_BYTES) {
+        close(fd);
+        return NULL;
+    }
+    size_t length = (size_t)info.st_size;
+    UInt8 *bytes = malloc(length);
+    if (!bytes) { close(fd); return NULL; }
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t count = read(fd, bytes + offset, length - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) break;
+        offset += (size_t)count;
+    }
+    close(fd);
+    CFDataRef data = offset == length ? CFDataCreate(kCFAllocatorDefault, bytes, length) : NULL;
+    free(bytes);
+    if (!data) return NULL;
+    CFPropertyListRef preferences = CFPropertyListCreateWithData(kCFAllocatorDefault, data,
+        kCFPropertyListImmutable, NULL, NULL);
+    CFRelease(data);
+    if (!preferences) return NULL;
+    if (CFGetTypeID(preferences) != CFDictionaryGetTypeID()) { CFRelease(preferences); return NULL; }
+    return (CFDictionaryRef)preferences;
+}
 
 typedef struct {
     bool isUIProcess;
     bool compareExecutableCaseInsensitive;
     CFStringRef executableName;
+    CFStringRef bundleIdentifier;
+    CFStringRef logicalPath;
 } ProcessContext;
 
 typedef struct {
@@ -74,6 +124,16 @@ static char *copy_executable_path(void) {
 // 一次建立进程身份，所有插件共享；路径和名称均按 UTF-8 处理。
 static ProcessContext process_context(const char *path) {
     ProcessContext context = {0};
+    CFBundleRef mainBundle = CFBundleGetMainBundle();
+    CFStringRef identifier = mainBundle ? CFBundleGetIdentifier(mainBundle) : NULL;
+    if (identifier) context.bundleIdentifier = CFRetain(identifier);
+    const char *logicalPath = path;
+#if !TARGET_OS_OSX && !LH_TESTING
+    if (path) logicalPath = rootfs(path);
+#endif
+    if (logicalPath && !strncmp(logicalPath, "/rootfs/", 8)) logicalPath += 7;
+    if (logicalPath && logicalPath[0] == '/')
+        context.logicalPath = CFStringCreateWithCString(kCFAllocatorDefault, logicalPath, kCFStringEncodingUTF8);
     const char *slash = path ? strrchr(path, '/') : NULL;
     if (slash) {
         size_t parentLength = slash - path;
@@ -91,6 +151,13 @@ static ProcessContext process_context(const char *path) {
         }
     }
     return context;
+}
+
+static void release_process_context(ProcessContext *context) {
+    if (context->executableName) CFRelease(context->executableName);
+    if (context->bundleIdentifier) CFRelease(context->bundleIdentifier);
+    if (context->logicalPath) CFRelease(context->logicalPath);
+    *context = (ProcessContext){0};
 }
 
 // 同时兼容原版 libhooker 与 Substrate 的版本范围格式，拒绝无效范围。
@@ -199,11 +266,18 @@ static int alphasort2(const struct dirent **a, const struct dirent **b) {
 
 // 先确定全部过滤结果，再加载管理器和插件，防止前一个插件改变后续筛选。
 static void tweaks_iterate(const ProcessContext *context) {
+    CFDictionaryRef configuration = read_configuration();
+    LHConfigPolicy policy = LHConfigPolicyCreate(configuration, context->bundleIdentifier, context->logicalPath);
+    if (configuration) CFRelease(configuration);
+    if (!LHConfigPolicyAllowsProcess(&policy)) {
+        LHConfigPolicyRelease(&policy);
+        return;
+    }
     const char *directory = TWEAKS_DIRECTORY;
-    if (!directory) return;
+    if (!directory) { LHConfigPolicyRelease(&policy); return; }
     struct dirent **files = NULL;
     int count = scandir(directory, &files, filter_dylib, alphasort2);
-    if (count < 0) { perror("scandir"); return; }
+    if (count < 0) { perror("scandir"); LHConfigPolicyRelease(&policy); return; }
     size_t capacity = (size_t)count < MAX_TWEAKMANAGERS + MAX_TWEAKS ? (size_t)count : MAX_TWEAKMANAGERS + MAX_TWEAKS;
     SelectedTweak *selected = capacity ? calloc(capacity, sizeof(*selected)) : NULL;
     int selectedCount = 0, managerCount = 0, tweakCount = 0;
@@ -215,6 +289,11 @@ static void tweaks_iterate(const ProcessContext *context) {
                 memcpy(path + length - 6, ".plist", 7);
                 bool manager = false;
                 bool matches = tweak_needinject(path, context, &manager);
+                if (matches && !manager) {
+                    CFStringRef filename = CFStringCreateWithCString(kCFAllocatorDefault, files[n]->d_name, kCFStringEncodingUTF8);
+                    matches = filename && LHConfigPolicyAllowsTweak(&policy, filename);
+                    if (filename) CFRelease(filename);
+                }
                 memcpy(path + length - 6, ".dylib", 7);
                 if (matches && (manager ? managerCount < MAX_TWEAKMANAGERS : tweakCount < MAX_TWEAKS)) {
                     selected[selectedCount++] = (SelectedTweak){path, manager};
@@ -242,6 +321,7 @@ static void tweaks_iterate(const ProcessContext *context) {
     }
     for (int i = 0; i < selectedCount; i++) free(selected[i].path);
     free(selected);
+    LHConfigPolicyRelease(&policy);
 }
 
 #if !TARGET_OS_OSX || LH_LOADER_UNIT_TEST
@@ -298,7 +378,7 @@ __attribute__((constructor)) static void injection_init(void) {
 #else
     tweaks_iterate(&context);
 #endif
-    if (context.executableName) CFRelease(context.executableName);
+    release_process_context(&context);
     free(path);
 }
 #endif
