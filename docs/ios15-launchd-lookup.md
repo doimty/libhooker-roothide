@@ -27,7 +27,7 @@ On systems without `_dyld_get_dlopen_image_header`, the resolver previously requ
 
 The fix first compares complete dyld image names to the requested path, without filesystem lookup. Canonical filesystem matching remains as a fallback for aliases. The resolver continues to use NOLOAD, LOCAL and FIRST flags and keeps its own handle until validation/close; it does not load an unrequested new library or match by basename.
 
-The exact filesystem failure and dyld return values on the original failing device were not logged. The supplied crash isolates a NULL image result, while the regression recreates the cache-only path condition that the old code mishandles. Do not present host regression as proof that every device-startup issue is fixed.
+The original crash report did not log filesystem or dyld return values. A subsequent USB Frida session on the connected iOS 15.1.1 device reproduced `realpath` ENOENT and a NULL image in baseline 21, while candidate 22 returned the correct image and both private symbols. The same comparison passed without an attached interception script. See [device validation](ios15-frida-validation.md) for the exact scope and cleanup record. This establishes the targeted query fix, not complete engine-replacement or reboot validation.
 
 ## Verification
 
