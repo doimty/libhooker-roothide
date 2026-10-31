@@ -1,0 +1,107 @@
+name: Build libhooker roothide
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/ios15-roothide-20261031
+    paths:
+      - '.github/workflows/**'
+      - 'Makefile'
+      - 'roothide.mk'
+      - 'build-config.mk'
+      - 'control'
+      - 'layout/**'
+      - 'libhooker/**'
+      - 'libblackjack/**'
+      - 'injector/**'
+      - 'safemode/**'
+      - 'compat/**'
+      - 'scripts/**'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (roothide, iOS 15)
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      THEOS_PACKAGE_SCHEME: roothide
+      FINALPACKAGE: '1'
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain information
+        run: |
+          set -euo pipefail
+          uname -a
+          xcodebuild -version
+          sw_vers
+
+      - name: Install packaging tools
+        run: |
+          set -euo pipefail
+          for formula in dpkg ldid make; do
+            brew list --versions "$formula" >/dev/null 2>&1 || brew install "$formula"
+          done
+
+      - name: Install roothide Theos
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/roothide/theos.git "$THEOS"
+          git -C "$THEOS" fetch --depth 1 origin 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
+          git -C "$THEOS" checkout --detach 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
+          git -C "$THEOS" submodule update --init --recursive
+          test -f "$THEOS/vendor/lib/iphone/roothide/libroothide.tbd"
+          test -f "$THEOS/makefiles/common.mk"
+
+      - name: Install iPhoneOS17.3.1 SDK
+        run: |
+          set -euo pipefail
+          sdk_commit=4a48e5409f8ea6ac422c44d91b86fa0f8ae010ff
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/xybp888/iOS-SDKs.git /tmp/ios-sdks
+          git -C /tmp/ios-sdks sparse-checkout set iPhoneOS17.3.1.sdk
+          git -C /tmp/ios-sdks fetch --depth 1 origin "$sdk_commit"
+          git -C /tmp/ios-sdks checkout --detach "$sdk_commit"
+          mkdir -p "$THEOS/sdks"
+          cp -R /tmp/ios-sdks/iPhoneOS17.3.1.sdk "$THEOS/sdks/"
+          test -f "$THEOS/sdks/iPhoneOS17.3.1.sdk/SDKSettings.plist"
+
+      - name: Packaging regression
+        run: |
+          set -euo pipefail
+          python3 tests/test-ios15-packaging.py
+
+      - name: Build package
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/make/libexec/gnubin:$THEOS/bin:$PATH"
+          rm -rf packages
+          make clean
+          make package 2>&1 | tee build.log
+          ls -l packages/
+
+      - name: Verify package
+        run: |
+          set -euo pipefail
+          export PATH="/opt/homebrew/opt/make/libexec/gnubin:$THEOS/bin:$PATH"
+          for deb in packages/*.deb; do
+            python3 scripts/verify-package.py "$deb"
+          done
+
+      - name: Upload deb and build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libhooker-roothide-ios15
+          path: |
+            packages/*.deb
+            build.log
+          if-no-files-found: warn
