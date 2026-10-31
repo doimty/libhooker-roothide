@@ -26,17 +26,6 @@ static struct dyld_cache_local_symbols_info localInfo;
 static bool wideEntries;
 
 typedef const void *(*LHDlopenHeaderLookup)(void *);
-typedef void (*LHDyldLockAction)(void);
-struct LHDyldOpenLock { LHDyldLockAction lock, unlock; };
-
-// 旧 dyld 的 NOLOAD 增引用与 dlclose 减引用使用不同锁，补上同一递归 API 锁。
-static struct LHDyldOpenLock LHGetDyldOpenLock(void) {
-    // 这两个 SPI 只拿/放 dlopen 的递归锁，不执行 fork 或重置锁状态。
-    LHDyldLockAction lock = dlsym(RTLD_DEFAULT, "_dyld_dlopen_atfork_prepare");
-    LHDyldLockAction unlock = dlsym(RTLD_DEFAULT, "_dyld_dlopen_atfork_parent");
-    if (!lock || !unlock) return (struct LHDyldOpenLock){0};
-    return (struct LHDyldOpenLock){lock, unlock};
-}
 
 // 读取磁盘共享缓存的符号区并核对运行中缓存的 UUID。
 static bool LHMapLocalSymbols(const char *path, bool separate) {
@@ -179,11 +168,10 @@ static const void *LHHeaderForHandle(void *handle, const char *path) {
 // 取得拥有引用的句柄后读取镜像；FIRST 排除没有显式重导出的普通依赖。
 static struct libhooker_image *LHOpenImageWithFlags(const char *path, int flags) {
     if (!path) return NULL;
-    struct LHDyldOpenLock openLock = {0};
-    if (flags & RTLD_NOLOAD) openLock = LHGetDyldOpenLock();
-    if (openLock.lock) openLock.lock();
+    // Fork preparation SPIs are not general-purpose locks: some dyld versions
+    // set stillForking and reject dlopen (including NOLOAD) until the parent hook.
+    // Keep normal dyld handle ownership without invoking any fork lifecycle hook.
     void *handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST | flags);
-    if (openLock.lock) openLock.unlock();
     if (!handle) return NULL;
     const void *header = LHHeaderForHandle(handle, path);
     uintptr_t slide = LHImageSlide(header);

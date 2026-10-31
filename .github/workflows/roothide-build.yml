@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - fix/ios15-roothide-20261031
+      - fix/ios1541-startup
     paths:
       - '.github/workflows/**'
       - 'Makefile'
@@ -49,6 +50,11 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-host.sh 2>&1 | tee host-tests.log
+
+      - name: Reproduce shipped22 fork-state failure
+        run: |
+          set -euo pipefail
+          bash scripts/test-shipped22-fork-regression.sh 2>&1 | tee fork-regression.log
 
       - name: Install packaging tools
         run: |
@@ -115,5 +121,7 @@ jobs:
             packages/*.deb
             build.log
             host-tests.log
+            fork-regression.log
+            worker/host-tests/shipped22-negative.log
             worker/lh-image-probe
           if-no-files-found: warn
