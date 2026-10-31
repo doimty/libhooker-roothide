@@ -14,6 +14,14 @@ make do
 
 需要使用原上游构建方式时，执行 `make clean THEOS_PACKAGE_SCHEME=`，再执行 `make package THEOS_PACKAGE_SCHEME=`。
 
+## iOS 15 兼容候选
+
+本地候选将部署目标与固件依赖下限统一为 `15.0`，保留 iOS `17.3.1` SDK、`arm64` / `arm64e` 和 `< 18.0` 的依赖上限。这是构建及依赖范围，不代表该范围内的设备均已验收；新版 SDK 不要求部署目标与 SDK 版本相同。
+
+保留现代 dyld 后端、镜像引用管理和 roothide 内存后端，不因旧文件或注释而切回上游的私有句柄解码。`_dyld_get_dlopen_image_header` 自 iOS 16 才提供，缺失时改为按规范化路径在公开镜像列表中匹配；`_dyld_image_*` 属长期公开 API，不解析 dlopen 句柄位。`/usr/lib/TweakLoader.dylib` 与 `/usr/lib/TweakInject.dylib` 使用相对链接指向 `libhooker/libinjector.dylib`，接入 RootHide 的固定加载入口，而不是指向 Hook 引擎。
+
+内存后端仍要求目标进程提供 `substrate_vm_protect` 和 `substrate_hook_memory`；这些接口缺失时会拒绝 Hook 提交，不用降低权限校验来掩盖缺失。dyld SPI、旧/新共享缓存符号表、实际 C / Objective-C Hook、插件加载和 SpringBoard 安全模式仍需在目标 iOS 15 环境验证。该候选仅面向 RootHide，不把降低版本号视为普通 rootless / rootful 适配。
+
 ## 代码结构
 
 | 目录或文件 | 职责 |
@@ -36,6 +44,7 @@ make do
 以下命令在仓库根目录执行：
 
 ```sh
+python3 tests/test-ios15-packaging.py
 bash scripts/test-host.sh
 make package
 python3 scripts/verify-package.py packages/org.coolstar.libhooker_1.6.9-21+roothide_iphoneos-arm64e.deb

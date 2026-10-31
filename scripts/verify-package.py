@@ -47,6 +47,11 @@ with tempfile.TemporaryDirectory(prefix="verify-package-", dir="worker") as dire
     for name in (f"usr/lib/{alias_name}.dylib", "usr/lib/libellekit.dylib", "usr/lib/libsubstrate.dylib",
                  "usr/lib/libblackjack.dylib", "Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"):
         assert (root / name).is_symlink() and (root / name).resolve() == engine
+    injector = root / "usr/lib/libhooker/libinjector.dylib"
+    for name in ("TweakLoader.dylib", "TweakInject.dylib"):
+        link = root / "usr/lib" / name
+        assert link.is_symlink() and os.readlink(link) == "libhooker/libinjector.dylib", name
+        assert link.resolve() == injector, name
     assert not (root / "usr/lib/libjoker.a").exists() and not (root / "usr/lib/libhooker.a").exists()
     for name in (f"{engine_name}.dylib", "libhooker/libinjector.dylib", "libhooker/MobileSafety.dylib"):
         binary = root / "usr/lib" / name

@@ -52,6 +52,9 @@ after-stage::
 			ln -s "$(LH_ENGINE_NAME).dylib" "$(THEOS_STAGING_DIR)/usr/lib/$$alias.dylib"; \
 		fi; \
 	done
+	# bootstrap 从这两个固定入口启动加载器；必须指向 injector，而非 Hook 引擎。
+	@ln -sfn "libhooker/libinjector.dylib" "$(THEOS_STAGING_DIR)/usr/lib/TweakLoader.dylib"
+	@ln -sfn "libhooker/libinjector.dylib" "$(THEOS_STAGING_DIR)/usr/lib/TweakInject.dylib"
 	@mkdir -p "$(THEOS_STAGING_DIR)/Library/Frameworks/CydiaSubstrate.framework" "$(THEOS_STAGING_DIR)/usr/lib/TweakInject"
 	@ln -s "../../../usr/lib/$(LH_ENGINE_NAME).dylib" "$(THEOS_STAGING_DIR)/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate"
 	# 静态库留在构建目录供开发验证，设备运行包只安装动态库。

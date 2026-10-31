@@ -14,6 +14,7 @@
 #include <mach-o/nlist.h>
 #include <ptrauth.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -145,6 +146,27 @@ static void LHSearchCache(const void *image, uintptr_t slide, const char **names
     }
 }
 
+// 取镜像头：优先 dyld SPI，旧系统退化到公开镜像列表，不解码未知句柄位。
+static const void *LHHeaderForHandle(void *handle, const char *path) {
+    LHDlopenHeaderLookup getHeader = dlsym(RTLD_DEFAULT, "_dyld_get_dlopen_image_header");
+    if (getHeader) {
+        const void *header = getHeader(handle);
+        if (header) return header;
+    }
+    // iOS 15 没有该 SPI；dlopen 成功后镜像必定在列表中，按规范化路径匹配。
+    char requested[PATH_MAX];
+    if (!path || !realpath(path, requested)) return NULL;
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        char candidate[PATH_MAX];
+        if (!name || !realpath(name, candidate) || strcmp(candidate, requested)) continue;
+        const void *header = _dyld_get_image_header(i);
+        return LHImageSlide(header) == UINTPTR_MAX ? NULL : header;
+    }
+    return NULL;
+}
+
 // 取得拥有引用的句柄后读取镜像；FIRST 排除没有显式重导出的普通依赖。
 static struct libhooker_image *LHOpenImageWithFlags(const char *path, int flags) {
     if (!path) return NULL;
@@ -154,8 +176,7 @@ static struct libhooker_image *LHOpenImageWithFlags(const char *path, int flags)
     void *handle = dlopen(path, RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST | flags);
     if (openLock.lock) openLock.unlock();
     if (!handle) return NULL;
-    LHDlopenHeaderLookup getHeader = dlsym(RTLD_DEFAULT, "_dyld_get_dlopen_image_header");
-    const void *header = getHeader ? getHeader(handle) : NULL;
+    const void *header = LHHeaderForHandle(handle, path);
     uintptr_t slide = LHImageSlide(header);
     if (slide == UINTPTR_MAX) { dlclose(handle); return NULL; }
     struct libhooker_image *image = malloc(sizeof(*image));
