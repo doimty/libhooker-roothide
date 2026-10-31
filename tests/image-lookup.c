@@ -37,6 +37,8 @@ static struct {
     const char *openPath;
     const void *spiHeader;
     bool openSucceeds, spiAvailable, diskAlias;
+    bool forkHooksAvailable, stillForking;
+    unsigned forkLookups, forkPrepares, forkParents, rejectedDuringFork;
     unsigned opens, closes, references, spiLookups, spiCalls;
     unsigned counts, names, headers, realpaths;
 } mock;
@@ -46,6 +48,7 @@ static void *mockDlopen(const char *path, int flags) {
     REQUIRE(path && !strcmp(path, mock.openPath));
     REQUIRE(flags == (RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST | RTLD_NOLOAD));
     mock.opens++;
+    if (mock.stillForking) { mock.rejectedDuringFork++; return NULL; }
     if (!mock.openSucceeds) return NULL;
     REQUIRE(mock.references == 0);
     mock.references++;
@@ -65,6 +68,16 @@ static const void *mockDlopenHeader(void *handle) {
     return mock.spiHeader;
 }
 
+static void mockForkPrepare(void) {
+    mock.forkPrepares++;
+    mock.stillForking = true;
+}
+
+static void mockForkParent(void) {
+    mock.forkParents++;
+    mock.stillForking = false;
+}
+
 // 仅替换被测源码的解析器；不覆盖宿主 libSystem 的 dlsym。
 static void *mockDlsym(void *handle, const char *name) {
     REQUIRE(handle == RTLD_DEFAULT);
@@ -73,9 +86,13 @@ static void *mockDlsym(void *handle, const char *name) {
         mock.spiLookups++;
         return mock.spiAvailable ? (void *)mockDlopenHeader : NULL;
     }
-    REQUIRE(!strcmp(name, "_dyld_dlopen_atfork_prepare") ||
-            !strcmp(name, "_dyld_dlopen_atfork_parent"));
-    return NULL;
+    if (!strcmp(name, "_dyld_dlopen_atfork_prepare")) {
+        mock.forkLookups++;
+        return mock.forkHooksAvailable ? (void *)mockForkPrepare : NULL;
+    }
+    REQUIRE(!strcmp(name, "_dyld_dlopen_atfork_parent"));
+    mock.forkLookups++;
+    return mock.forkHooksAvailable ? (void *)mockForkParent : NULL;
 }
 
 static uint32_t mockImageCount(void) {
@@ -116,7 +133,10 @@ static char *mockRealpath(const char *path, char *resolved) {
 #define _dyld_get_image_name mockImageName
 #define _dyld_get_image_header mockImageHeader
 #define realpath mockRealpath
-#include "../libhooker/dyld/dyldSyms-modern.c"
+#ifndef LH_DYLD_TEST_SOURCE
+#define LH_DYLD_TEST_SOURCE "../libhooker/dyld/dyldSyms-modern.c"
+#endif
+#include LH_DYLD_TEST_SOURCE
 #undef realpath
 #undef _dyld_get_image_header
 #undef _dyld_get_image_name
@@ -167,6 +187,23 @@ static void testCacheOnlyImage(void) {
     REQUIRE(mock.spiLookups == 1 && mock.spiCalls == 0);
     REQUIRE(mock.realpaths == 0);
     requireTargetAndClose(image);
+}
+
+// 后期 dyld 的 fork SPI 会改变状态，不得把它们当成通用查询锁。
+static void testPresentForkHooks(void) {
+    resetFixture();
+    mock.forkHooksAvailable = true;
+    struct libhooker_image *image = LHOpenLoadedImage(iosurfacePath);
+    requireTargetAndClose(image);
+    REQUIRE(mock.forkLookups == 0 && mock.forkPrepares == 0 && mock.forkParents == 0);
+    REQUIRE(!mock.stillForking && mock.rejectedDuringFork == 0);
+
+    resetFixture();
+    mock.forkHooksAvailable = true;
+    mock.openSucceeds = false;
+    REQUIRE(LHOpenLoadedImage(iosurfacePath) == NULL);
+    REQUIRE(mock.forkLookups == 0 && mock.forkPrepares == 0 && mock.forkParents == 0);
+    REQUIRE(!mock.stillForking && mock.rejectedDuringFork == 0 && !mock.references);
 }
 
 // 完整路径匹配不能破坏原有的磁盘符号链接/别名回退。
@@ -241,6 +278,7 @@ static void testInvalidMachO(void) {
 }
 
 int main(void) {
+    testPresentForkHooks();
     testCacheOnlyImage();
     testDiskAlias();
     testHeaderSPI();

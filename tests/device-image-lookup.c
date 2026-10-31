@@ -31,6 +31,12 @@ int main(int argc, char **argv) {
         dlclose(system);
         return 1;
     }
+    const void *forkPrepare = dlsym(RTLD_DEFAULT, "_dyld_dlopen_atfork_prepare");
+    const void *forkParent = dlsym(RTLD_DEFAULT, "_dyld_dlopen_atfork_parent");
+    printf("dyld fork SPI exports: prepare=%s parent=%s (not called)\n",
+        forkPrepare ? "present" : "absent", forkParent ? "present" : "absent");
+    const char *(*engineVersion)(void) = (const char *(*)(void))dlsym(engine, "LHVersion");
+    if (engineVersion) printf("Engine version: %s\n", engineVersion());
     GetImage getImage = (GetImage)dlsym(engine, "MSGetImageByName");
     FindSymbol findSymbol = (FindSymbol)dlsym(engine, "MSFindSymbol");
     if (!getImage || !findSymbol) {
