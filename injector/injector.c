@@ -18,7 +18,6 @@
 #include <dlfcn.h>
 #include <os/log.h>
 #include <mach-o/dyld.h>
-#include <TargetConditionals.h>
 #if !TARGET_OS_OSX
 #include <roothide/roothide.h>
 #endif

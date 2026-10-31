@@ -1,0 +1,88 @@
+/* 
+  Localizable.strings
+  libhooker configurator
+
+  Created by Deon on 2020-11-09. (Updated by Evan Galli on 2021-04-09)
+  Copyright © 2021 coolstar. All rights reserved.
+*/
+
+"libhooker" = "libhooker";
+
+"Apply" = "Apply";
+"Version" = "Version";
+"Jailbreak" = "Jailbreak";
+"iOS" = "iOS";
+
+"Global Configuration" = "Global Configuration";
+"Tweaks" = "Tweaks";
+"Old ABI Patch" = "Old ABI Patch";
+"Allow tweaks in webpages" = "Allow tweaks in webpages";
+"Tweak Compatibility" = "Tweak Compatibility";
+"Default Configuration" = "Default Configuration";
+"Reset Configuration" = "Reset Configuration";
+
+"Process Configuration" = "Process Configuration";
+"SpringBoard" = "SpringBoard";
+"Applications" = "Applications";
+"Daemons" = "Daemons";
+
+
+// Menu: Tweak compatibility
+"Compatibility Mode" = "Compatibility Mode";
+"libhooker Default" = "Libhooker Default";
+"Substrate Compatibility" = "Substrate Compatibility";
+"Enabling substrate compatibility may allow some poorly written / outdated tweaks to work. However, this will increase memory usage." = "Enabling substrate compatibility may allow some poorly written / outdated tweaks to work. However, this will increase memory usage.";
+
+
+// Menu: Default configuration
+"Enable Tweaks" = "Enable Tweaks";
+"Override Configuration" = "Override Configuration";
+"Allow" = "Allow";
+"Deny" = "Deny";
+
+
+// Alert: Apply 
+"Apply Changes" = "Apply Changes";
+"Respring" = "Respring";
+"ldRestart" = "LDRestart";
+"Cancel" = "Cancel";
+"Reboot Userspace" = "Reboot Userspace";
+"Later" = "Later";
+
+
+// Alert: Reset configuration
+"Tweak configurations for all processes will be reset" = "Tweak configurations for all processes will be reset";
+"Yes" = "Yes";
+"No" = "No";
+
+
+// Alert: Something required
+"Required" = "Required";
+"An ldrestart" = "An ldrestart";
+"A userspace reboot" = "A userspace reboot";
+"is required to apply changes" = "is required to apply changes";
+"Ok" = "Ok";
+
+// RootHide Procursus process management
+"Inherit" = "Use Default";
+"Use Inherited Configuration" = "Restore Default Rules";
+"Remove this process override and use the next matching path or default record." = "Remove this process's individual rules and use inherited rules.";
+"Custom Tweak Selection" = "Custom Tweaks";
+"Allow (0)" = "Allow";
+"Deny (1)" = "Deny";
+"Disabling tweaks skips all tweaks in this process. A process override replaces the whole record: bundle, then executable path, then default, then built-in settings. Restart the target app or respring SpringBoard to apply changes." = "Turn off to skip tweaks in this process. Reopen the app to apply changes; respring for SpringBoard.";
+"With custom selection off, only the tweak's existing Filter applies. With it on, Allow (0) permits only selected tweaks; Deny (1) blocks selected tweaks. Filters still apply in both modes." = "Allow loads only selected tweaks. Deny skips selected tweaks. Turn off custom selection to use each tweak's normal scope.";
+"No tweak dylibs were found. An empty Allow list permits no tweaks." = "No tweaks found. An empty Allow list loads no tweaks.";
+"Could not read the installed tweak list:" = "Could not read the tweak list:";
+"Settings are saved when edited. Restart the target app to apply them. For SpringBoard, respring. For a userspace reboot, use Dopamine. Running processes do not reload these settings live." = "Settings save automatically. Reopen the target app, or respring / reboot userspace through Dopamine to apply them.";
+"The global Tweaks switch disables all tweak injection. Webpage tweaks also require this switch. Changes take effect when each process restarts." = "Turn off to skip tweaks in all processes. Changes apply when each process restarts.";
+"Could Not Save or Read Settings" = "Could Not Save or Read Settings";
+"Settings could not be read or saved. Check the preference file's permissions or contents, then try again. Failed edits are reverted." = "Settings could not be read or saved. Check the preference file's permissions or contents, then try again. Failed edits are reverted.";
+"Unknown error" = "Unknown error";
+"Search" = "Search";
+"Loading process list…" = "Loading process list…";
+"Could not read daemon directory:" = "Could not read daemon directory:";
+"Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration." = "Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration.";
+"No configurable daemons were found." = "No configurable daemons were found.";
+"Some daemon plists could not be read or did not specify an absolute executable path:" = "Some daemon plists could not be read or did not specify an absolute executable path:";
+"No visible applications were found. The application list may be unavailable." = "No visible applications were found. The application list may be unavailable.";

@@ -1,0 +1,71 @@
+/* 
+  Localizable.strings
+  libhooker configurator
+
+  Created by Deon on 11/9/20.
+  Copyright © 2021 coolstar. All rights reserved.
+*/
+"Apply" = "应用";
+"Version" = "版本";
+"Jailbreak" = "越狱";
+"iOS" = "iOS 版本";
+"Global Configuration" = "总体配置";
+"Tweaks" = "插件";
+"Allow tweaks in webpages" = "允许插件在网页上";
+"Default Configuration" = "通用配置";
+"Reset Configuration" = "重置配置";
+"Process Configuration" = "进程配置";
+"SpringBoard" = "主屏幕";
+"Applications" = "应用程序";
+"Daemons" = "系统进程";
+//二級菜單
+"Enable Tweaks" = "启用插件";
+"Old ABI Patch" = "Old ABI Patch";
+"Override Configuration" = "独立配置";
+"Allow" = "允许";
+"Deny" = "禁止";
+// Apply
+"Apply Changes" = "应用选项";
+"Respring" = "注销";
+"ldRestart" = "软重启";
+"Cancel" = "取消";
+"Reboot Userspace" = "重启用户空间";
+
+
+"libhooker" = "libhooker 设置";
+"is required to apply changes" = "请求做出更改";
+"Required" = "请求";
+// New features
+"libhooker Default" = "libhooker 默认模式";
+"Substrate Compatibility" = "Substrate 兼容模式";
+"Compatibility Mode" = "模式选择";
+"Enabling substrate compatibility may allow some poorly written / outdated tweaks to work. However, this will increase memory usage." = "启用 Substrate 兼容模式可以让过时的插件正常工作，但是会增加内存使用量。";
+"Tweak Compatibility" = "插件兼容性";
+
+// RootHide Procursus 进程管理
+"Yes" = "是";
+"No" = "否";
+"Ok" = "好";
+"Tweak configurations for all processes will be reset" = "将重置所有进程的插件配置";
+"Inherit" = "恢复默认";
+"Use Inherited Configuration" = "恢复默认规则";
+"Remove this process override and use the next matching path or default record." = "移除此进程的独立规则，恢复使用继承的规则。";
+"Custom Tweak Selection" = "自定义插件";
+"Allow (0)" = "允许";
+"Deny (1)" = "禁止";
+"Disabling tweaks skips all tweaks in this process. A process override replaces the whole record: bundle, then executable path, then default, then built-in settings. Restart the target app or respring SpringBoard to apply changes." = "关闭后，此进程将不加载插件。重新打开应用后生效；SpringBoard 需要重载。";
+"With custom selection off, only the tweak's existing Filter applies. With it on, Allow (0) permits only selected tweaks; Deny (1) blocks selected tweaks. Filters still apply in both modes." = "允许：仅加载选中的插件。禁止：不加载选中的插件。关闭自定义时，按插件默认适用范围加载。";
+"No tweak dylibs were found. An empty Allow list permits no tweaks." = "未找到插件。允许列表为空时，不加载任何插件。";
+"Could not read the installed tweak list:" = "无法读取插件列表：";
+"Settings are saved when edited. Restart the target app to apply them. For SpringBoard, respring. For a userspace reboot, use Dopamine. Running processes do not reload these settings live." = "设置已自动保存。重新打开目标应用，或在 Dopamine 中重载 SpringBoard / 重启用户空间后生效。";
+"The global Tweaks switch disables all tweak injection. Webpage tweaks also require this switch. Changes take effect when each process restarts." = "关闭后，所有进程均不加载插件。各进程重新启动后生效。";
+"Could Not Save or Read Settings" = "无法保存或读取设置";
+"Settings could not be read or saved. Check the preference file's permissions or contents, then try again. Failed edits are reverted." = "无法读取或保存设置。请检查偏好设置文件的权限或内容，然后重试。保存失败的更改会被撤销。";
+"Unknown error" = "未知错误";
+"Search" = "搜索";
+"Loading process list…" = "正在载入进程列表…";
+"Could not read daemon directory:" = "无法读取守护进程目录：";
+"Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration." = "根据已安装的 launch daemon plist 文件列出服务，包括未在运行的服务。使用相同可执行文件的服务共用配置。";
+"No configurable daemons were found." = "未找到可配置的守护进程。";
+"Some daemon plists could not be read or did not specify an absolute executable path:" = "部分守护进程 plist 无法读取，或未指定可执行文件的绝对路径，已跳过的文件数：";
+"No visible applications were found. The application list may be unavailable." = "未找到可见的应用程序。可能无法读取应用列表。";

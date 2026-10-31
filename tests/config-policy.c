@@ -59,15 +59,22 @@ static void set_int(CFMutableDictionaryRef target, CFStringRef key, int value) {
     CFRelease(number);
 }
 
-static void expect(CFDictionaryRef preferences, CFStringRef bundle, CFStringRef path,
+static void expect_at(unsigned line, CFDictionaryRef preferences, CFStringRef bundle, CFStringRef path,
         bool process, bool alpha, bool beta, bool unknown) {
     LHConfigPolicy policy = LHConfigPolicyCreate(preferences, bundle, path);
+    if (LHConfigPolicyAllowsProcess(&policy) != process ||
+        LHConfigPolicyAllowsTweak(&policy, CFSTR("Alpha.dylib")) != alpha ||
+        LHConfigPolicyAllowsTweak(&policy, CFSTR("Beta.dylib")) != beta ||
+        LHConfigPolicyAllowsTweak(&policy, CFSTR("Unknown.dylib")) != unknown)
+        fprintf(stderr, "config-policy scenario from line %u\n", line);
     CHECK(LHConfigPolicyAllowsProcess(&policy) == process);
     CHECK(LHConfigPolicyAllowsTweak(&policy, CFSTR("Alpha.dylib")) == alpha);
     CHECK(LHConfigPolicyAllowsTweak(&policy, CFSTR("Beta.dylib")) == beta);
     CHECK(LHConfigPolicyAllowsTweak(&policy, CFSTR("Unknown.dylib")) == unknown);
     LHConfigPolicyRelease(&policy);
 }
+
+#define expect(...) expect_at(__LINE__, __VA_ARGS__)
 
 static CFMutableDictionaryRef custom_list(CFMutableDictionaryRef record, int mode) {
     CFDictionarySetValue(record, CFSTR("customConfig"), kCFBooleanTrue);
@@ -287,8 +294,9 @@ static void test_malformed_lists(void) {
     }
     CFMutableDictionaryRef list = child_dictionary(value.defaults, CFSTR("tweakConfigs"));
     CFDictionarySetValue(list, CFSTR("Alpha.dylib"), kCFBooleanTrue);
-    for (size_t index = 0; index < sizeof(malformed) / sizeof(malformed[0]); index++) {
-        CFDictionarySetValue(list, CFSTR("Beta.dylib"), malformed[index]);
+    CFTypeRef malformedMembers[] = {kCFNull, CFSTR("list"), array, number};
+    for (size_t index = 0; index < sizeof(malformedMembers) / sizeof(malformedMembers[0]); index++) {
+        CFDictionarySetValue(list, CFSTR("Beta.dylib"), malformedMembers[index]);
         expect(value.preferences, NULL, NULL, true, true, true, true);
         set_int(value.defaults, CFSTR("allowDeny"), 1);
         expect(value.preferences, NULL, NULL, true, true, true, true);
