@@ -4,7 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 : "${THEOS:?Set THEOS to the pinned RootHide Theos checkout}"
 THEOS="$(cd "$THEOS" && pwd)"
-sdk="${LHC_SDK:-$THEOS/sdks/iPhoneOS17.3.1.sdk}"
+sdk="${LHC_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
 derived="${LHC_BUILD_DIR:-$root/.build/roothide}"
 output="${LHC_OUTPUT_DIR:-$root/packages}"
 version="${LHC_PACKAGE_VERSION:-1.4+roothide.1}"
