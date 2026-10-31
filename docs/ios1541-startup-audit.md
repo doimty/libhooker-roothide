@@ -54,6 +54,16 @@ Configurator's disable setting gates the plugin scan after RootHide infrastructu
 
 Dopamine's RootHide blacklist is evaluated earlier at process spawn and can select a separate non-injection path. This fork's optional executable whitelist can alter blacklist precedence (`libroothider/src/blacklist.m`); a GUI cannot promise isolation by changing only the Configurator plist. Any integration with RootHide app isolation must be a separate explicit feature with fresh-process verification. No library enumeration is falsified by this patch.
 
+## New evidence: RootHide dyld fix / Spinlock Fix enabled
+
+The user subsequently confirmed that the friend enabled this setting. This changes runtime paths, but does not establish the black-screen cause.
+
+RootHide generates its patched dyld from the device's own `/usr/lib/dyld` (`libjailbreak/src/basebin_gen.m:38-87,145-154`), changes AMFI/UUID and merges its hooks; it does not upgrade dyld to a different OS version. The user flag selects dyld patching versus signing-flags paths (`libroothider/src/common.m:229-263`). On iOS15 arm64e, the spinlock hook remaps executable shared-cache mappings MAP_FIXED | MAP_PRIVATE at the same addresses (`dyldhook/src/spinlock_fix.c:88-101,128-145`). This does not remove the native fork-state semantics, so the confirmed fork-SPI misuse remains relevant when the patch is enabled.
+
+The per-process `dyld_patch_fallback_enabled` state is determined by patched-dyld jbinfo/check-in availability (`systemhook/src/roothider_main.c:604-629`); it is not simply the inverse of the UI setting. The fallback wrappers preserve NOLOAD flags and tail-call native dyld. `DYLD_IN_CACHE=0` does not remove libdyld or IOSurface from the normal system shared cache.
+
+The original Dopamine warning states that full-blacklisted apps on iOS15 arm64e with Spinlock Fix can have their extensions disabled and can still trigger spinlock panics. The explicit prewarm/extension restrictions are at `launchdhook/src/roothider.m:535-568`. Full RootHide blacklist isolation and Configurator/Choicy plugin suppression are therefore different testing states. No setting, package or device reboot was changed during this audit; the friend's first-failure logs are still needed.
+
 ## Needed to attribute and validate iOS15.4.1
 
 Collect the first failure's launchd/panic report if present, otherwise SpringBoard/backboardd/watchdog report or a hang sample, plus machine ID and Dopamine/basebin version. A dyld error mentioning fork handlers would directly confirm the source defect path. If SpringBoard remains alive, scene/safety-marker and tweak/manager loading data distinguish a loader problem from missing recovery UI. Do not request another reboot solely to guess a cause when existing reports can establish it.
