@@ -153,10 +153,19 @@ static const void *LHHeaderForHandle(void *handle, const char *path) {
         const void *header = getHeader(handle);
         if (header) return header;
     }
-    // iOS 15 没有该 SPI；dlopen 成功后镜像必定在列表中，按规范化路径匹配。
-    char requested[PATH_MAX];
-    if (!path || !realpath(path, requested)) return NULL;
+    // iOS 15 没有该 SPI。共享缓存中的镜像不一定有独立磁盘文件，
+    // 必须先按 dyld 的完整镜像路径匹配，不能把 realpath 失败当成未加载。
+    if (!path) return NULL;
     uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name || strcmp(name, path)) continue;
+        const void *header = _dyld_get_image_header(i);
+        return LHImageSlide(header) == UINTPTR_MAX ? NULL : header;
+    }
+    // 仍保留磁盘符号链接/别名路径的规范化匹配。
+    char requested[PATH_MAX];
+    if (!realpath(path, requested)) return NULL;
     for (uint32_t i = 0; i < count; i++) {
         const char *name = _dyld_get_image_name(i);
         char candidate[PATH_MAX];

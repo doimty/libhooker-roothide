@@ -18,7 +18,7 @@ make do
 
 本地候选将部署目标与固件依赖下限统一为 `15.0`，保留 iOS `17.3.1` SDK、`arm64` / `arm64e` 和 `< 18.0` 的依赖上限。这是构建及依赖范围，不代表该范围内的设备均已验收；新版 SDK 不要求部署目标与 SDK 版本相同。
 
-保留现代 dyld 后端、镜像引用管理和 roothide 内存后端，不因旧文件或注释而切回上游的私有句柄解码。`_dyld_get_dlopen_image_header` 自 iOS 16 才提供，缺失时改为按规范化路径在公开镜像列表中匹配；`_dyld_image_*` 属长期公开 API，不解析 dlopen 句柄位。`/usr/lib/TweakLoader.dylib` 与 `/usr/lib/TweakInject.dylib` 使用相对链接指向 `libhooker/libinjector.dylib`，接入 RootHide 的固定加载入口，而不是指向 Hook 引擎。
+保留现代 dyld 后端、镜像引用管理和 roothide 内存后端，不因旧文件或注释而切回上游的私有句柄解码。`_dyld_get_dlopen_image_header` 自 iOS 16 才提供，缺失时先按 dyld 已加载镜像的完整路径匹配，再对磁盘别名做规范化回退；共享缓存镜像没有独立磁盘文件时，不再因 `realpath` 失败而被拒绝。`_dyld_image_*` 属长期公开 API，不解析 dlopen 句柄位。`/usr/lib/TweakLoader.dylib` 与 `/usr/lib/TweakInject.dylib` 使用相对链接指向 `libhooker/libinjector.dylib`，接入 RootHide 的固定加载入口，而不是指向 Hook 引擎。
 
 内存后端仍要求目标进程提供 `substrate_vm_protect` 和 `substrate_hook_memory`；这些接口缺失时会拒绝 Hook 提交，不用降低权限校验来掩盖缺失。dyld SPI、旧/新共享缓存符号表、实际 C / Objective-C Hook、插件加载和 SpringBoard 安全模式仍需在目标 iOS 15 环境验证。该候选仅面向 RootHide，不把降低版本号视为普通 rootless / rootful 适配。
 
@@ -47,8 +47,9 @@ make do
 python3 tests/test-ios15-packaging.py
 bash scripts/test-host.sh
 make package
-python3 scripts/verify-package.py packages/org.coolstar.libhooker_1.6.9-21+roothide_iphoneos-arm64e.deb
+python3 scripts/verify-package.py packages/org.coolstar.libhooker_1.6.9-22+roothide_iphoneos-arm64e.deb
 bash scripts/build-device-rollback.sh
+bash scripts/build-device-image-lookup.sh
 ```
 
 宿主测试在 macOS 上使用 Xcode 命令行工具及 AddressSanitizer、UndefinedBehaviorSanitizer，覆盖指令编码、影子页、线程暂停、内存后端、Hook 资源、头部中继和符号缓存。包校验另需 `dpkg-deb`，检查元数据、相对链接、双架构、最低系统版本、引擎依赖及导出接口；更改包版本后应传入对应 DEB。校验 `libhooker` 名称的产物时，在命令末尾追加 `libhooker`。
@@ -56,3 +57,5 @@ bash scripts/build-device-rollback.sh
 `build-device-rollback.sh` 使用 `tests/device-rollback.entitlements.plist` 签名独立的双架构回滚测试程序，输出到 `worker/device-rollback/`，不连接或安装到设备。
 
 本地测试与打包通过不代表设备验收完成。注入、安全模式和实际 Hook 行为仍需在目标设备上验证。构建中间文件位于 `.theos/`、`worker/`，发行包位于 `packages/`，均不纳入版本控制。
+
+`1.6.9-22+roothide` 是 iOS 15 镜像查找修复候选，不代表完整 ElleKit ABI 兼容或真机重启验收完成。崩溃地址与断言的对应关系、宿主回归覆盖和尚未验证的项目见 [调查记录](docs/ios15-launchd-lookup.md)。`worker/lh-image-probe` 在独立进程中查询 IOSurface 与两个私有符号，不安装 Hook、不写目标内存、不操作 launchd，也不会自动安装或运行到设备上。

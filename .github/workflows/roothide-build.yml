@@ -45,6 +45,11 @@ jobs:
           xcodebuild -version
           sw_vers
 
+      - name: Host runtime regression
+        run: |
+          set -euo pipefail
+          bash scripts/test-host.sh 2>&1 | tee host-tests.log
+
       - name: Install packaging tools
         run: |
           set -euo pipefail
@@ -96,6 +101,11 @@ jobs:
             python3 scripts/verify-package.py "$deb"
           done
 
+      - name: Build standalone lookup diagnostic
+        run: |
+          set -euo pipefail
+          bash scripts/build-device-image-lookup.sh
+
       - name: Upload deb and build log
         if: always()
         uses: actions/upload-artifact@v4
@@ -104,4 +114,6 @@ jobs:
           path: |
             packages/*.deb
             build.log
+            host-tests.log
+            worker/lh-image-probe
           if-no-files-found: warn

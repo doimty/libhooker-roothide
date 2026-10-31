@@ -23,3 +23,6 @@ worker/host-tests/header-relay-mask
 xcrun clang "${common[@]}" tests/symbol-cache.c libhooker/dyld/macho-symbols.c \
     -o worker/host-tests/symbol-cache
 worker/host-tests/symbol-cache
+xcrun clang "${common[@]}" tests/image-lookup.c libhooker/dyld/macho-symbols.c \
+    -o worker/host-tests/image-lookup
+worker/host-tests/image-lookup
