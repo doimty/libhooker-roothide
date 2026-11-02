@@ -18,7 +18,14 @@ class RootTableViewController: BaseTableViewController {
                                : [.tweaks, .web, .compatibility, .defaults, .reset]
         #endif
     }
-    private var reportedLoadError = false
+    private var preferencesReady = false
+    private var refreshing = false
+    private var refreshPending = false
+    private var foregroundObserver: NSObjectProtocol?
+
+    deinit {
+        if let observer = foregroundObserver { NotificationCenter.default.removeObserver(observer) }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -31,15 +38,52 @@ class RootTableViewController: BaseTableViewController {
             DispatchQueue.main.async { self.tableView.reloadData() }
         }
         #endif
+        refreshControl = UIRefreshControl()
+        refreshControl?.addTarget(self, action: #selector(refreshContent), for: .valueChanged)
+        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                                                    object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.isViewLoaded, self.view.window != nil,
+                  self.navigationController?.topViewController === self else { return }
+            self.refreshContent()
+        }
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        if !reportedLoadError && LHUserDefaults.standard.lastError != nil {
-            reportedLoadError = true
-            showPreferenceError()
-        }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        refreshContent()
+    }
+
+    @objc private func refreshContent() {
+        guard !refreshing else { refreshPending = true; return }
+        refreshing = true
+        preferencesReady = false
+        navigationItem.prompt = String(localizationKey: "Loading settings…")
         tableView.reloadData()
+        var remaining = 2
+        let finished: () -> Void = { [weak self] in
+            remaining -= 1
+            guard remaining == 0, let self = self else { return }
+            self.refreshing = false
+            if self.refreshPending {
+                self.refreshPending = false
+                self.refreshContent()
+                return
+            }
+            self.refreshControl?.endRefreshing()
+            self.navigationItem.prompt = nil
+            self.tableView.reloadData()
+        }
+        DeviceInfo.shared.refreshPackagesList(completion: finished)
+        LHUserDefaults.standard.reloadAsync { [weak self] success in
+            self?.preferencesReady = success
+            finished()
+        }
+    }
+
+    override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        let enabled = indexPath.section != 1 || preferencesReady
+        cell.isUserInteractionEnabled = enabled
+        cell.contentView.alpha = enabled ? 1 : 0.5
     }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
@@ -170,6 +214,12 @@ class RootTableViewController: BaseTableViewController {
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        if section == 0, let error = DeviceInfo.shared.packagesListError {
+            return String(localizationKey: "Could not refresh package versions:") + " " + error.localizedDescription
+        }
+        if section == 1, let error = LHUserDefaults.standard.lastError {
+            return String(localizationKey: "Pull to refresh and retry reading settings.") + "\n" + error.localizedDescription
+        }
         #if LHC_ROOTHIDE
         if section == 1 {
             return String(localizationKey: "The global Tweaks switch disables all tweak injection. Webpage tweaks also require this switch. Changes take effect when each process restarts.")
@@ -189,6 +239,7 @@ class RootTableViewController: BaseTableViewController {
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 0 { return }
+        if indexPath.section == 1 && !preferencesReady { return }
         if indexPath.section == 1 {
             switch globalRows[indexPath.row] {
             case .compatibility:
@@ -208,7 +259,12 @@ class RootTableViewController: BaseTableViewController {
                     #if !LHC_ROOTHIDE
                     LHUserDefaults.standard.set(nil, forKey: "memPrefs")
                     #endif
-                    if !LHUserDefaults.standard.synchronize() { self.showPreferenceError() }
+                    if LHUserDefaults.standard.synchronize() {
+                        // synchronize already publishes the saved snapshot; no second disk read.
+                        self.tableView.reloadData()
+                    } else {
+                        self.showPreferenceError()
+                    }
                 })
                 alert.addAction(UIAlertAction(title: String(localizationKey: "No"), style: .cancel))
                 present(alert, animated: true)

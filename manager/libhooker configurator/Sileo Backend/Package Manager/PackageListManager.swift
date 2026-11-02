@@ -41,6 +41,11 @@ class PackageListManager {
     }
     
     func packagesList() -> [String: Package] {
+        (try? loadPackagesList()) ?? [:]
+    }
+
+    // Refresh callers surface read failures instead of replacing their last good snapshot.
+    func loadPackagesList() throws -> [String: Package] {
         let packagesFile = self.dpkgDir().appendingPathComponent("status").resolvingSymlinksInPath()
         
         var packagesList = [String: Package]()
@@ -120,10 +125,8 @@ class PackageListManager {
                 packagesList[packageID] = package
             }
             tempDictionary.removeAll()
-        } catch let error {
-            #if DEBUG
-            print(error.localizedDescription)
-            #endif
+        } catch {
+            throw error
         }
         
         return packagesList

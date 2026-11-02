@@ -86,13 +86,44 @@ public class DeviceInfo {
         #endif
     }
     
-    let packagesList = PackageListManager.shared.packagesList()
+    // All snapshot state and callbacks belong to the main queue. Getters never start I/O.
+    private var packagesList: [String: Package] = [:]
+    private var packagesListLoaded = false
+    private var packagesListLoading = false
+    private var packageCallbacks: [() -> Void] = []
+    private(set) var packagesListError: Error?
+    private let packagesListQueue = DispatchQueue(label: "libhooker.packagesList", qos: .userInitiated)
+
+    func refreshPackagesList(completion: @escaping () -> Void) {
+        precondition(Thread.isMainThread)
+        packageCallbacks.append(completion)
+        guard !packagesListLoading else { return }
+        packagesListLoading = true
+        packagesListQueue.async {
+            let result = Result { try PackageListManager.shared.loadPackagesList() }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let fresh):
+                    self.packagesList = fresh
+                    self.packagesListError = nil
+                case .failure(let error):
+                    self.packagesListError = error // Keep the last good snapshot on failure.
+                }
+                self.packagesListLoaded = true
+                self.packagesListLoading = false
+                let callbacks = self.packageCallbacks
+                self.packageCallbacks.removeAll()
+                callbacks.forEach { $0() }
+            }
+        }
+    }
+
     func libhookerVersion() -> String {
         #if targetEnvironment(simulator)
         return "1.4.0"
         #else
-        let libhookerPackage = packagesList["org.coolstar.libhooker"]
-        return libhookerPackage?.version ?? "Unknown"
+        guard packagesListLoaded else { return "…" }
+        return packagesList["org.coolstar.libhooker"]?.version ?? "Unknown"
         #endif
     }
     

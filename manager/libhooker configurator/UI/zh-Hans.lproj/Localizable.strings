@@ -64,6 +64,17 @@
 "Unknown error" = "未知错误";
 "Search" = "搜索";
 "Loading process list…" = "正在载入进程列表…";
+"Loading settings…" = "正在读取设置…";
+"Pull to refresh and retry reading settings." = "下拉刷新可重新读取设置。";
+"Could not refresh package versions:" = "软件包版本刷新失败：";
+"Some applications were skipped:" = "部分应用已跳过：";
+"Some daemon directories or plists were skipped:" = "部分守护进程目录或 plist 已跳过：";
+"Application bundle URL is unavailable." = "未取得应用 bundle URL。";
+"Application name or identifier is unavailable." = "未取得应用名称或标识。";
+"Property list is not a dictionary." = "属性列表不是字典。";
+"Daemon plist does not specify an absolute executable path." = "守护进程 plist 未指定绝对可执行路径。";
+"Unknown application" = "未知应用";
+"Only the first 5 errors are shown." = "仅显示前 5 条错误。";
 "Could not read daemon directory:" = "无法读取守护进程目录：";
 "Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration." = "根据已安装的 launch daemon plist 文件列出服务，包括未在运行的服务。使用相同可执行文件的服务共用配置。";
 "No configurable daemons were found." = "未找到可配置的守护进程。";

@@ -95,20 +95,31 @@ enum LHProcessConfiguration {
 }
 
 final class LHUserDefaults {
-    static let standard = LHUserDefaults()
+    // UI loads this store explicitly in the background; opening/registering never writes.
+    static let standard = LHUserDefaults(loadImmediately: false)
 
     private let urlProvider: () -> URL
     private let fileManager: FileManager
+    private let reloadQueue: DispatchQueue
     private var persisted: [String: Any] = [:]
     private var registered: [String: Any] = [:]
     private var pending: [String: Any] = [:]
     private var removed = Set<String>()
+    private var processChanges: [(record: [String: Any]?, bundle: String, path: String)] = []
+    private var generation: UInt = 0
+    private var reloadCallbacks: [(Bool) -> Void] = []
+    private(set) var isReloading = false
+    private(set) var hasLoaded = false
     private(set) var lastError: Error?
 
-    init(urlProvider: @escaping () -> URL = LHPaths.preferencesURL, fileManager: FileManager = .default) {
+    // Mutable state is owned by the calling/UI thread; only immutable snapshots cross queues.
+    init(urlProvider: @escaping () -> URL = LHPaths.preferencesURL, fileManager: FileManager = .default,
+         loadImmediately: Bool = true,
+         reloadQueue: DispatchQueue = DispatchQueue(label: "libhooker.preferences.read", qos: .userInitiated)) {
         self.urlProvider = urlProvider
         self.fileManager = fileManager
-        reload()
+        self.reloadQueue = reloadQueue
+        if loadImmediately { reload() }
     }
 
     convenience init(url: URL) {
@@ -135,6 +146,7 @@ final class LHUserDefaults {
     }
 
     func set(_ value: Any?, forKey key: String) {
+        if key == "tweakconfigs" { processChanges.removeAll() }
         if let value = value {
             pending[key] = value
             removed.remove(key)
@@ -144,7 +156,12 @@ final class LHUserDefaults {
         }
     }
 
-    private func read(at url: URL) throws -> [String: Any] {
+    // Apply a single process edit to the freshly-read tree, preserving other processes.
+    func setProcessConfiguration(_ record: [String: Any]?, bundle: String, path: String) {
+        processChanges.append((record, bundle, path))
+    }
+
+    private static func read(at url: URL) throws -> [String: Any] {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -162,9 +179,40 @@ final class LHUserDefaults {
         return dictionary
     }
 
+    // Coalesce overlapping reads. A read started before a save must not overwrite that save.
+    func reloadAsync(completion: @escaping (Bool) -> Void) {
+        precondition(Thread.isMainThread)
+        reloadCallbacks.append(completion)
+        guard !isReloading else { return }
+        isReloading = true
+        let requestedGeneration = generation
+        let url = urlProvider()
+        reloadQueue.async {
+            let result = Result { try Self.read(at: url) }
+            DispatchQueue.main.async {
+                if requestedGeneration == self.generation {
+                    switch result {
+                    case .success(let snapshot):
+                        self.persisted = snapshot
+                        self.lastError = nil
+                    case .failure(let error):
+                        self.lastError = error
+                    }
+                    self.hasLoaded = true
+                }
+                self.isReloading = false
+                let callbacks = self.reloadCallbacks
+                self.reloadCallbacks.removeAll()
+                callbacks.forEach { $0(self.lastError == nil && self.hasLoaded) }
+            }
+        }
+    }
+
     @discardableResult func reload() -> Bool {
+        generation &+= 1
+        hasLoaded = true
         do {
-            persisted = try read(at: urlProvider())
+            persisted = try Self.read(at: urlProvider())
             lastError = nil
             return true
         } catch {
@@ -175,17 +223,25 @@ final class LHUserDefaults {
 
     /// A no-op until an explicit edit. Failed saves discard the edit so the UI can revert.
     @discardableResult func synchronize() -> Bool {
-        guard !pending.isEmpty || !removed.isEmpty else { return lastError == nil }
+        guard !pending.isEmpty || !removed.isEmpty || !processChanges.isEmpty else { return lastError == nil }
+        generation &+= 1
+        hasLoaded = true
         defer {
             pending.removeAll()
             removed.removeAll()
+            processChanges.removeAll()
         }
         do {
             let url = urlProvider() // Resolve the current bootstrap through the API on each save.
-            var latest = try read(at: url)
+            var latest = try Self.read(at: url)
             persisted = latest
             for key in removed { latest.removeValue(forKey: key) }
             latest.merge(pending) { _, new in new }
+            for change in processChanges {
+                let configs = latest["tweakconfigs"] as? [String: Any] ?? [:]
+                latest["tweakconfigs"] = LHProcessConfiguration.setting(change.record, in: configs,
+                                                                       bundle: change.bundle, path: change.path)
+            }
             let data = try PropertyListSerialization.data(fromPropertyList: latest, format: .binary, options: 0)
             try atomicWrite(data, to: url)
             persisted = latest

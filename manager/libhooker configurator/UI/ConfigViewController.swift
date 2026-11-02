@@ -20,7 +20,17 @@ class ConfigViewController: UITableViewController {
     public var launchService: LaunchService?
     private var tweaksList: [TweakConfig] = []
     private var currentRecord: [String: Any] = [:]
+    private var filenames: [String] = []
     private var tweakListError: String?
+    private var preferencesReady = false
+    private var loading = false
+    private var refreshPending = false
+    private var foregroundObserver: NSObjectProtocol?
+    private let scanQueue = DispatchQueue(label: "libhooker.tweak-list", qos: .userInitiated)
+
+    deinit {
+        if let observer = foregroundObserver { NotificationCenter.default.removeObserver(observer) }
+    }
 
     override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
@@ -36,6 +46,18 @@ class ConfigViewController: UITableViewController {
                                                                style: .plain, target: self,
                                                                action: #selector(useInheritedConfiguration))
         }
+        refreshControl = UIRefreshControl()
+        refreshControl?.addTarget(self, action: #selector(fetch), for: .valueChanged)
+        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                                                    object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.isViewLoaded, self.view.window != nil,
+                  self.navigationController?.topViewController === self else { return }
+            self.fetch()
+        }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
         fetch()
     }
 
@@ -53,28 +75,34 @@ class ConfigViewController: UITableViewController {
         }
     }
 
+    override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        cell.isUserInteractionEnabled = preferencesReady && !loading
+        cell.contentView.alpha = preferencesReady && !loading ? 1 : 0.5
+    }
+
     @objc private func enablePressed(sender: UISwitch) {
+        guard preferencesReady && !loading else { return }
         enableTweaks = sender.isOn
         save()
     }
 
     @objc private func overrideConfigPressed(sender: UISwitch) {
+        guard preferencesReady && !loading else { return }
         customConfig = sender.isOn
         save()
     }
 
     @objc private func useInheritedConfiguration() {
-        guard let service = launchService else { return }
+        guard preferencesReady && !loading, let service = launchService else { return }
         let alert = UIAlertController(title: String(localizationKey: "Use Inherited Configuration"),
                                       message: String(localizationKey: "Remove this process override and use the next matching path or default record."),
                                       preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: String(localizationKey: "Yes"), style: .destructive) { _ in
+        alert.addAction(UIAlertAction(title: String(localizationKey: "Yes"), style: .destructive) { [weak self] _ in
+            guard let self = self else { return }
             let defaults = LHUserDefaults.standard
-            let configs = defaults.dictionary(forKey: "tweakconfigs") ?? [:]
-            defaults.set(LHProcessConfiguration.setting(nil, in: configs, bundle: service.bundle, path: service.path),
-                         forKey: "tweakconfigs")
+            defaults.setProcessConfiguration(nil, bundle: service.bundle, path: service.path)
             if !defaults.synchronize() { self.showPreferenceError() }
-            self.fetch()
+            self.applySnapshot()
             self.tableView.reloadData()
         })
         alert.addAction(UIAlertAction(title: String(localizationKey: "Cancel"), style: .cancel))
@@ -103,22 +131,26 @@ class ConfigViewController: UITableViewController {
             }
             let cell = SegmentedCell()
             cell.keys = [String(localizationKey: "Allow (0)"), String(localizationKey: "Deny (1)")]
-            cell.segment.selectedSegmentIndex = allowDeny
+            cell.segment.selectedSegmentIndex = min(max(allowDeny, 0), 1)
             cell.backgroundColor = ThemeManager.backgroundColour
-            cell.saveFunc = { index in
+            cell.saveFunc = { [weak self] index in
+                guard let self = self, self.preferencesReady && !self.loading, (0...1).contains(index) else { return }
                 self.allowDeny = index
                 self.save()
             }
             return cell
         }
         let cell = ConfigSwitch()
-        cell.textLabel?.text = tweaksList[indexPath.row].name
+        let tweak = tweaksList[indexPath.row]
+        cell.textLabel?.text = tweak.name
         cell.textLabel?.textColor = ThemeManager.labelColour
         cell.textLabel?.adjustsFontSizeToFitWidth = true
-        cell.control.isOn = tweaksList[indexPath.row].state
+        cell.control.isOn = tweak.state
         cell.backgroundColor = ThemeManager.backgroundColour
-        cell.saveFunc = { state in
-            self.tweaksList[indexPath.row].state = state
+        cell.saveFunc = { [weak self] state in
+            guard let self = self, self.preferencesReady && !self.loading,
+                  let index = self.tweaksList.firstIndex(where: { $0.name == tweak.name }) else { return }
+            self.tweaksList[index].state = state
             self.save()
         }
         return cell
@@ -127,6 +159,10 @@ class ConfigViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0:
+            if loading { return String(localizationKey: "Loading settings…") }
+            if let error = LHUserDefaults.standard.lastError {
+                return String(localizationKey: "Pull to refresh and retry reading settings.") + "\n" + error.localizedDescription
+            }
             return String(localizationKey: "Disabling tweaks skips all tweaks in this process. A process override replaces the whole record: bundle, then executable path, then default, then built-in settings. Restart the target app or respring SpringBoard to apply changes.")
         case 1:
             var help = String(localizationKey: "With custom selection off, only the tweak's existing Filter applies. With it on, Allow (0) permits only selected tweaks; Deny (1) blocks selected tweaks. Filters still apply in both modes.")
@@ -138,57 +174,83 @@ class ConfigViewController: UITableViewController {
         }
     }
 
-    private func fetch() {
-        enableTweaks = true
-        customConfig = false
-        allowDeny = 1
-        currentRecord = [:]
-        tweakListError = nil
-        if let service = launchService,
-           let configs = LHUserDefaults.standard.dictionary(forKey: "tweakconfigs"),
-           let record = LHProcessConfiguration.record(in: configs, bundle: service.bundle, path: service.path) {
-            currentRecord = record
-            enableTweaks = record["enableTweaks"] as? Bool ?? true
-            customConfig = record["customConfig"] as? Bool ?? false
-            allowDeny = (record["allowDeny"] as? Int) == 0 ? 0 : 1
+    // Both disk reads run off-main. Publish one complete snapshot and keep edits disabled until ready.
+    @objc private func fetch() {
+        guard !loading else { refreshPending = true; return }
+        loading = true
+        preferencesReady = false
+        navigationItem.prompt = String(localizationKey: "Loading settings…")
+        navigationItem.rightBarButtonItem?.isEnabled = false
+        tableView.reloadData()
+        var remaining = 2
+        let finished: () -> Void = { [weak self] in
+            remaining -= 1
+            guard remaining == 0, let self = self else { return }
+            self.loading = false
+            if self.refreshPending {
+                self.refreshPending = false
+                self.fetch()
+                return
+            }
+            self.navigationItem.prompt = nil
+            self.navigationItem.rightBarButtonItem?.isEnabled = self.preferencesReady
+            self.refreshControl?.endRefreshing()
+            self.applySnapshot()
+            self.tableView.reloadData()
         }
+        LHUserDefaults.standard.reloadAsync { [weak self] success in
+            self?.preferencesReady = success
+            finished()
+        }
+        let path = LHPaths.jailbreak("/usr/lib/TweakInject")
+        scanQueue.async {
+            #if targetEnvironment(simulator)
+            let result: Result<[String], Error> = .success(["Test1.dylib", "Test2.dylib"])
+            #else
+            let result = Result { try FileManager.default.contentsOfDirectory(atPath: path) }
+            #endif
+            DispatchQueue.main.async { [weak self] in
+                if let self = self {
+                    switch result {
+                    case .success(let names):
+                        self.filenames = names.filter(LHProcessConfiguration.isTweakFilename)
+                        self.tweakListError = nil
+                    case .failure(let error):
+                        self.tweakListError = String(localizationKey: "Could not read the installed tweak list:") + " " + error.localizedDescription
+                    }
+                }
+                finished()
+            }
+        }
+    }
+
+    private func applySnapshot() {
+        let configs = LHUserDefaults.standard.dictionary(forKey: "tweakconfigs") ?? [:]
+        if let service = launchService {
+            currentRecord = LHProcessConfiguration.record(in: configs, bundle: service.bundle, path: service.path) ?? [:]
+        } else { currentRecord = [:] }
+        enableTweaks = currentRecord["enableTweaks"] as? Bool ?? true
+        customConfig = currentRecord["customConfig"] as? Bool ?? false
+        allowDeny = (currentRecord["allowDeny"] as? Int) == 0 ? 0 : 1
+        // Keep saved entries for temporarily uninstalled tweaks, including on scan failures.
         var tweaks = (currentRecord["tweakConfigs"] as? [String: Bool] ?? [:])
             .filter { LHProcessConfiguration.isTweakFilename($0.key) }
-        // Keep saved keys for temporarily uninstalled tweaks, even when directory reads fail.
-        #if targetEnvironment(simulator)
-        let filenames = ["Test1.dylib", "Test2.dylib"]
-        #else
-        var filenames: [String] = []
-        do {
-            filenames = try FileManager.default.contentsOfDirectory(atPath: LHPaths.jailbreak("/usr/lib/TweakInject"))
-        } catch {
-            tweakListError = String(localizationKey: "Could not read the installed tweak list:") + " " + error.localizedDescription
-        }
-        #endif
-        for filename in filenames where LHProcessConfiguration.isTweakFilename(filename) {
-            if tweaks[filename] == nil { tweaks[filename] = false }
-        }
+        for filename in filenames where tweaks[filename] == nil { tweaks[filename] = false }
         tweaksList = tweaks.map { TweakConfig(name: $0.key, state: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func save() {
-        guard let service = launchService else { return }
+        guard preferencesReady && !loading, let service = launchService else { return }
         var record = currentRecord
         record["enableTweaks"] = enableTweaks
         record["customConfig"] = customConfig
         record["allowDeny"] = allowDeny // 0 = Allow selected only; 1 = Deny selected.
         record["tweakConfigs"] = Dictionary(uniqueKeysWithValues: tweaksList.map { ($0.name, $0.state) })
         let defaults = LHUserDefaults.standard
-        let configs = defaults.dictionary(forKey: "tweakconfigs") ?? [:]
-        defaults.set(LHProcessConfiguration.setting(record, in: configs, bundle: service.bundle, path: service.path),
-                     forKey: "tweakconfigs")
-        if !defaults.synchronize() {
-            showPreferenceError()
-            fetch()
-        } else {
-            currentRecord = record
-        }
+        defaults.setProcessConfiguration(record, bundle: service.bundle, path: service.path)
+        if !defaults.synchronize() { showPreferenceError() }
+        applySnapshot() // No directory re-scan or second disk read after saving/resetting.
         tableView.reloadData()
     }
 }

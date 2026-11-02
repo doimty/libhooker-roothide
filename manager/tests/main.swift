@@ -1,4 +1,13 @@
 import Foundation
+import Dispatch
+
+func waitUntil(_ condition: () -> Bool) throws {
+    let deadline = Date().addingTimeInterval(5)
+    while !condition() && Date() < deadline {
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+    }
+    try expect(condition(), "timed out waiting for asynchronous callback")
+}
 #if canImport(Darwin)
 import Darwin
 #else
@@ -228,6 +237,110 @@ do {
             let tweaks = result["tweakConfigs"] as! [String: Bool]
             try expect(tweaks["A.B.dylib"] == true && tweaks["Uninstalled.dylib"] == false && tweaks["A"] == nil, "full and orphan filename keys preserved")
         }
+    }
+
+    try test("deferred-read-coalesces-and-never-writes") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        try writePlist(["tweaksEnabled": false], to: url)
+        let before = try Data(contentsOf: url)
+        var resolutions = 0
+        let queue = DispatchQueue(label: "test.deferred")
+        let store = LHUserDefaults(urlProvider: { resolutions += 1; return url },
+                                   loadImmediately: false, reloadQueue: queue)
+        store.register(defaults: ["tweaksEnabled": true])
+        try expect(resolutions == 0 && !store.hasLoaded, "init and registration perform no read")
+        queue.suspend()
+        var resumed = false
+        defer { if !resumed { queue.resume() } }
+        var callbacks = 0
+        var successful = true
+        for _ in 0..<3 {
+            store.reloadAsync { success in
+                successful = successful && success && Thread.isMainThread
+                callbacks += 1
+            }
+        }
+        try expect(store.isReloading && callbacks == 0 && resolutions == 1, "one background read, no blocking caller")
+        queue.resume(); resumed = true
+        try waitUntil { callbacks == 3 }
+        try expect(successful && store.hasLoaded && !store.isReloading, "all callbacks on main after completion")
+        try expect(!store.bool(forKey: "tweaksEnabled"), "persisted false replaces placeholder default")
+        try expect(try Data(contentsOf: url) == before, "async opening preserves bytes")
+    }
+
+    try test("late-async-read-never-overwrites-new-save") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        try writePlist(["tweaksEnabled": false], to: url)
+        let queue = DispatchQueue(label: "test.stale-read")
+        let store = LHUserDefaults(urlProvider: { url }, reloadQueue: queue)
+        var finished = false
+        store.reloadAsync { _ in finished = true }
+        queue.sync {} // Snapshot captured, but its main-queue publication has not run.
+        store.set(true, forKey: "tweaksEnabled")
+        try expect(store.synchronize(), "new edit saved before old result publication")
+        try waitUntil { finished }
+        try expect(store.bool(forKey: "tweaksEnabled"), "old result discarded by generation")
+        try expect(try readPlist(url)["tweaksEnabled"] as? Bool == true, "disk still holds new edit")
+    }
+
+    try test("async-refresh-failure-keeps-snapshot-and-retries") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        try writePlist(["tweaksEnabled": false], to: url)
+        let store = LHUserDefaults(url: url)
+        try Data("broken plist".utf8).write(to: url)
+        var result: Bool?
+        store.reloadAsync { result = $0 }
+        try waitUntil { result != nil }
+        try expect(result == false && store.lastError != nil && !store.bool(forKey: "tweaksEnabled"),
+                   "failed refresh retains last good values and exposes error")
+        try writePlist(["tweaksEnabled": true], to: url)
+        result = nil
+        store.reloadAsync { result = $0 }
+        try waitUntil { result != nil }
+        try expect(result == true && store.lastError == nil && store.bool(forKey: "tweaksEnabled"),
+                   "later foreground refresh sees external edits")
+    }
+
+    try test("single-process-save-preserves-external-process-edits") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        let store = LHUserDefaults(url: url)
+        let external: [String: Any] = ["bundles": ["other.app": ["enableTweaks": false]],
+                                        "default": ["customConfig": true]]
+        try writePlist(["tweakconfigs": external, "external": "keep"], to: url)
+        store.setProcessConfiguration(["enableTweaks": true], bundle: "our.app", path: "")
+        try expect(store.synchronize(), "single record edit")
+        let configs = try readPlist(url)["tweakconfigs"] as! [String: Any]
+        let bundles = configs["bundles"] as! [String: Any]
+        try expect(bundles["other.app"] != nil && bundles["our.app"] != nil && configs["default"] != nil,
+                   "merge against latest nested tree, not old UI snapshot")
+        store.setProcessConfiguration(nil, bundle: "our.app", path: "")
+        try expect(store.synchronize(), "inherit edit")
+        let next = store.dictionary(forKey: "tweakconfigs")!["bundles"] as! [String: Any]
+        try expect(next["our.app"] == nil && next["other.app"] != nil, "inherit only removes selected process")
+    }
+
+    try test("reset-clears-queued-process-edits") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        let store = LHUserDefaults(url: url)
+        store.setProcessConfiguration(["enableTweaks": false], bundle: "our.app", path: "")
+        store.set(nil, forKey: "tweakconfigs")
+        try expect(store.synchronize(), "reset succeeds")
+        let resetFile = try readPlist(url)
+        try expect(store.dictionary(forKey: "tweakconfigs") == nil && resetFile["tweakconfigs"] == nil,
+                   "reset publishes empty snapshot without an extra read")
+    }
+
+    try test("failed-process-edit-is-discarded") { directory in
+        let url = directory.appendingPathComponent("prefs.plist")
+        try writePlist(["external": "keep"], to: url)
+        let before = try Data(contentsOf: url)
+        let store = LHUserDefaults(urlProvider: { url }, fileManager: FailOneModeChange())
+        store.setProcessConfiguration(["enableTweaks": false], bundle: "our.app", path: "")
+        try expect(!store.synchronize(), "failed atomic save")
+        try expect(try Data(contentsOf: url) == before, "old bytes kept")
+        store.set(true, forKey: "tweaksEnabled")
+        try expect(store.synchronize(), "later independent edit succeeds")
+        try expect((try readPlist(url))["tweakconfigs"] == nil, "failed pending record never leaks into next save")
     }
 
     print("\(passed) Foundation preference/path contract tests passed")

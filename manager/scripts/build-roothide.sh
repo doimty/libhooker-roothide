@@ -7,7 +7,7 @@ THEOS="$(cd "$THEOS" && pwd)"
 sdk="${LHC_SDK:-$(xcrun --sdk iphoneos --show-sdk-path)}"
 derived="${LHC_BUILD_DIR:-$root/.build/roothide}"
 output="${LHC_OUTPUT_DIR:-$root/packages}"
-version="${LHC_PACKAGE_VERSION:-1.4+roothide.1}"
+version="${LHC_PACKAGE_VERSION:-1.4+roothide.2}"
 package=org.coolstar.libhooker-configurator
 
 for tool in xcodebuild xcrun ldid dpkg-deb; do

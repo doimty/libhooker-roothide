@@ -63,6 +63,10 @@ assert "normalizeRootFSPath(LHRootFSPath(path))" in store
 assert "0o644" in store and "fsync(handle.fileDescriptor)" in store
 assert "rename(temporary.path, url.path)" in store
 assert "pending.isEmpty" in store and "private var registered" in store
+assert "LHUserDefaults(loadImmediately: false)" in store
+assert "func reloadAsync" in store and "requestedGeneration == self.generation" in store
+assert "setProcessConfiguration" in store and "processChanges.removeAll()" in store
+assert plistlib.loads((APP / "Info.plist").read_bytes())["UIRequiredDeviceCapabilities"] == ["arm64"]
 launch = read(APP / "AppDelegate.swift")
 assert '"tweaksEnabled": true' in launch and '"webProcessTweaks": true' in launch
 assert ".synchronize()" not in launch

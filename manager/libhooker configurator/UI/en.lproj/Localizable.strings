@@ -81,6 +81,17 @@
 "Unknown error" = "Unknown error";
 "Search" = "Search";
 "Loading process list…" = "Loading process list…";
+"Loading settings…" = "Loading settings…";
+"Pull to refresh and retry reading settings." = "Pull to refresh and retry reading settings.";
+"Could not refresh package versions:" = "Could not refresh package versions:";
+"Some applications were skipped:" = "Some applications were skipped:";
+"Some daemon directories or plists were skipped:" = "Some daemon directories or plists were skipped:";
+"Application bundle URL is unavailable." = "Application bundle URL is unavailable.";
+"Application name or identifier is unavailable." = "Application name or identifier is unavailable.";
+"Property list is not a dictionary." = "Property list is not a dictionary.";
+"Daemon plist does not specify an absolute executable path." = "Daemon plist does not specify an absolute executable path.";
+"Unknown application" = "Unknown application";
+"Only the first 5 errors are shown." = "Only the first 5 errors are shown.";
 "Could not read daemon directory:" = "Could not read daemon directory:";
 "Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration." = "Lists installed launch daemon plists, including services that are not currently running. Services sharing an executable share its configuration.";
 "No configurable daemons were found." = "No configurable daemons were found.";

@@ -45,6 +45,14 @@ commands for respring, ldrestart, or userspace reboot. The Apply dialog instruct
 the user to restart the target app or respring SpringBoard. Use Dopamine for a
 userspace reboot. Running processes do not reload these settings live.
 
+### Changes in 1.4+roothide.2
+
+- Package versions and tweak-directory scans load off the main thread; getters do not start repeated I/O. Package refreshes coalesce, keep the last good snapshot on read failure, and update the visible rows on completion.
+- Opening the app registers defaults without reading or writing the preference file. Screens explicitly read a snapshot in the background and keep editing disabled until that read completes. Returning to a screen, foreground activation and pull-to-refresh reload external changes.
+- A delayed read started before a save is discarded using a generation check. Single-process saves and inheritance deletion apply to the latest on-disk configuration tree, preserving other processes edited externally. Atomic mode/flush/rename and failed-edit rollback remain unchanged. Individual saves remain synchronous; no write durability was traded for speed.
+- Process list errors include at most five concrete details plus a total count. Hidden apps remain filtered; relative daemon executable paths remain unconfigured rather than guessed. Deterministic plist ordering stabilizes shared-executable labels.
+- The app declares arm64 capabilities. No new engine toggles, helpers, restart commands, or device actions are introduced.
+
 ### Build on macOS
 
 Use Xcode with its command-line tools, `ldid`, `dpkg-deb`, and the pinned RootHide
@@ -79,7 +87,7 @@ Xcode project. It calls the actual `jbroot` / `rootfs` APIs from
 Default outputs:
 
 - App: `.build/roothide/Build/Products/Release-iphoneos/libhooker.app`.
-- Package: `packages/org.coolstar.libhooker-configurator_1.4+roothide.1_iphoneos-arm64e.deb`.
+- Package: `packages/org.coolstar.libhooker-configurator_1.4+roothide.2_iphoneos-arm64e.deb`.
 - Package app payload: `/Applications/libhooker.app`, signed by `ldid` with
   [Entitlements-roothide.plist](Entitlements-roothide.plist). `IsTweakManager` is
   set on the packaged app. No helper, setuid file, or maintainer script is added.
@@ -135,7 +143,7 @@ preserved by later saves.
 ### Validation and remaining limits
 
 [tests/main.swift](tests/main.swift) compiles the real Foundation preference and
-path code without UIKit. Its 12 tests cover no writes on open or registration,
+path code without UIKit. Its 18 tests cover deferred and coalesced reads, main-queue completion, stale-read rejection, failure/retry, per-process merge/reset, no writes on open or registration,
 mode `0644`, atomic failure preservation and cleanup, malformed and
 non-dictionary plists, serialization errors, independent top-level edits,
 current path resolution at save, whole-record precedence, inheritance removal,

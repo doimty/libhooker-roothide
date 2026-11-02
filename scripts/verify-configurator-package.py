@@ -48,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix='verify-configurator-',dir='worker') as 
     assert info['CFBundleExecutable']=='libhooker'
     assert info['CFBundleIdentifier']=='org.coolstar.libhooker-configurator'
     assert info['MinimumOSVersion']=='15.0'
+    assert info['UIRequiredDeviceCapabilities']==['arm64']
     assert (app/'zh-Hans.lproj/Localizable.strings').is_file()
     binary=app/info['CFBundleExecutable']
     architectures=subprocess.check_output(['xcrun','lipo','-archs',str(binary)],text=True).split()
