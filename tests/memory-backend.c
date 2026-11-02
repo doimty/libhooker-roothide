@@ -11,6 +11,8 @@
 #include "../libhooker/mem/shadowMem.h"
 
 static unsigned checks;
+static unsigned availableExports = 3, resolutions, legacyPreparations;
+static bool legacyAvailable = true;
 #define REQUIRE(condition) do { \
     ++checks; \
     if (!(condition)) { \
@@ -75,8 +77,9 @@ static kern_return_t mockProtect(vm_map_t task, mach_vm_address_t address, mach_
 // 仅向被测源码提供两个 bootstrap 接口，不覆盖宿主进程的动态解析器。
 static void *mockDlsym(void *handle, const char *name) {
     REQUIRE(handle == RTLD_DEFAULT);
-    if (!strcmp(name, "substrate_hook_memory")) return (void *)mockPatch;
-    if (!strcmp(name, "substrate_vm_protect")) return (void *)mockProtect;
+    resolutions++;
+    if (!strcmp(name, "substrate_hook_memory")) return (availableExports & 1) ? (void *)mockPatch : NULL;
+    if (!strcmp(name, "substrate_vm_protect")) return (availableExports & 2) ? (void *)mockProtect : NULL;
     REQUIRE(false);
     return NULL;
 }
@@ -110,6 +113,21 @@ static kern_return_t mockRead(vm_map_read_t task, mach_vm_address_t address, mac
 // 指令缓存维护只记录调用，不对宿主执行页做任何操作。
 static void mockInvalidate(void *address, size_t size) { (void)address; (void)size; mock.invalidations++; }
 
+// 旧版后端的设备行为另做真机验证；此处只验证完整选择与初始化缓存。
+static bool mockPrepareLegacy(void) { legacyPreparations++; return legacyAvailable; }
+
+// 使用不同的函数地址区分成对的本地/服务后端，防止混选被相同桩掩盖。
+static kern_return_t mockLegacyProtect(vm_map_t task, mach_vm_address_t address, mach_vm_size_t size,
+        boolean_t maximum, vm_prot_t protection) {
+    return mockProtect(task, address, size, maximum, protection);
+}
+static kern_return_t mockLegacyPatch(void *destination, const void *source, size_t size) {
+    return mockPatch(destination, source, size);
+}
+
+#define LHPrepareLegacyMemory mockPrepareLegacy
+#define LHLegacyProtect mockLegacyProtect
+#define LHLegacyPatch mockLegacyPatch
 #define dlsym mockDlsym
 #define mach_vm_region_recurse mockRegion
 #define mach_vm_protect mockProtect
@@ -121,6 +139,9 @@ static void mockInvalidate(void *address, size_t size) { (void)address; (void)si
 #undef mach_vm_protect
 #undef mach_vm_read_overwrite
 #undef sys_icache_invalidate
+#undef LHPrepareLegacyMemory
+#undef LHLegacyProtect
+#undef LHLegacyPatch
 
 // 普通 RW 页只改脏字节，邻接字节及权限保持原值，不调用 bootstrap 整页补丁。
 static void testDirtyRanges(void) {
@@ -219,19 +240,79 @@ static void testRestoreFailures(void) {
     }
 }
 
-// 使用真实页大小及普通堆内存运行后端回归，所有权限操作均经过桩。
-int main(void) {
+// 初始化尚未成功时不得写字节或改权限，也不能缓存一次准备失败。
+static void testUnavailableAttempt(void) {
+    resetFixture(VM_PROT_READ | VM_PROT_EXECUTE);
+    dirtyRange(8, 8);
+    REQUIRE(!LHCommitMemoryRanges((uintptr_t)memory, replacement, PAGE_SIZE, mask, mock.protection));
+    REQUIRE(!mock.patches && !mock.protects && !memcmp(memory, original, PAGE_SIZE));
+    REQUIRE(mock.protection == (VM_PROT_READ | VM_PROT_EXECUTE));
+}
+
+// 每个选择模式运行于独立进程，覆盖真实生产选择器的成功缓存和失败重试。
+int main(int argc, char **argv) {
+    if (argc > 2) return 2;
+    const char *mode = argc == 2 ? argv[1] : "service";
+    bool expectedLegacy = false;
+    unsigned expectedResolutions = 2, expectedPreparations = 0;
     REQUIRE(!posix_memalign((void **)&memory, PAGE_SIZE, PAGE_SIZE));
     original = malloc(PAGE_SIZE); replacement = malloc(PAGE_SIZE);
     mask = malloc(PAGE_SIZE / 8); scratch = malloc(PAGE_SIZE * 2);
     REQUIRE(original && replacement && mask && scratch);
+    if (!strcmp(mode, "partial-patch") || !strcmp(mode, "partial-protect")) {
+        availableExports = !strcmp(mode, "partial-patch") ? 1 : 2;
+        testUnavailableAttempt();
+        REQUIRE(resolutions == 2 && !legacyPreparations);
+        // 缓存已存在的导出，只重查先前缺失的一项，且始终不混用 legacy。
+        availableExports = 3;
+        expectedResolutions = 3;
+    } else if (!strcmp(mode, "unavailable")) {
+        availableExports = 0;
+        legacyAvailable = false;
+        testUnavailableAttempt();
+        REQUIRE(resolutions == 2 && legacyPreparations == 1);
+        availableExports = 3;
+        expectedResolutions = 4;
+        expectedPreparations = 1;
+    } else if (!strcmp(mode, "legacy-retry") || !strcmp(mode, "legacy-unavailable")) {
+        availableExports = 0;
+        legacyAvailable = false;
+        unsigned attempts = !strcmp(mode, "legacy-unavailable") ? 2 : 1;
+        for (unsigned index = 0; index < attempts; index++) {
+            testUnavailableAttempt();
+            REQUIRE(resolutions == 2 * (index + 1) && legacyPreparations == index + 1);
+        }
+        // 导出仍缺失，只让本地准备后来成功，验证 legacy 本身可重试。
+        legacyAvailable = true;
+        expectedLegacy = true;
+        expectedResolutions = 2 * (attempts + 1);
+        expectedPreparations = attempts + 1;
+    } else if (!strcmp(mode, "legacy") || !strcmp(mode, "legacy-pinned")) {
+        availableExports = 0;
+        expectedLegacy = true;
+        expectedPreparations = 1;
+        if (!strcmp(mode, "legacy-pinned")) {
+            struct LHMemoryBackend backend = LHInitializeMemory();
+            REQUIRE(backend.protect == mockLegacyProtect && backend.patch == mockLegacyPatch);
+            REQUIRE(resolutions == 2 && legacyPreparations == 1);
+            // 初始化成功后即使服务导出出现，仍固定使用成对的本地后端。
+            availableExports = 3;
+        }
+    } else if (strcmp(mode, "service")) {
+        fprintf(stderr, "unknown memory backend mode: %s\n", mode);
+        return 2;
+    }
     testDirtyRanges();
     testCommitProtection();
     testPartialCommit();
     testRestorePreservesLiveBytes();
     testRestoreReportedErrors();
     testRestoreFailures();
+    struct LHMemoryBackend backend = LHInitializeMemory();
+    REQUIRE(backend.protect == (expectedLegacy ? mockLegacyProtect : mockProtect));
+    REQUIRE(backend.patch == (expectedLegacy ? mockLegacyPatch : mockPatch));
+    REQUIRE(resolutions == expectedResolutions && legacyPreparations == expectedPreparations);
     free(memory); free(original); free(replacement); free(mask); free(scratch);
-    printf("PASS memory backend dirty ranges, protection and verified rollback: %u checks\n", checks);
+    printf("PASS memory backend %s, dirty ranges, protection and verified rollback: %u checks\n", mode, checks);
     return 0;
 }

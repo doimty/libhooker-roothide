@@ -50,6 +50,9 @@ jobs:
       - name: Host runtime regression
         run: |
           set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --target worker/host-test-deps unicorn==2.1.2
+          export PYTHONPATH="$PWD/worker/host-test-deps${PYTHONPATH:+:$PYTHONPATH}"
+          python3 -c 'import unicorn; assert unicorn.__version__ == "2.1.2"'
           bash scripts/test-host.sh 2>&1 | tee host-tests.log
 
       - name: Reproduce shipped22 fork-state failure
@@ -121,10 +124,12 @@ jobs:
             python3 scripts/verify-configurator-package.py "$deb"
           done
 
-      - name: Build standalone lookup diagnostic
+      - name: Build standalone diagnostics
         run: |
           set -euo pipefail
           bash scripts/build-device-image-lookup.sh
+          bash scripts/build-device-rollback.sh
+          bash scripts/build-device-compat.sh
 
       - name: Upload deb and build log
         if: always()
@@ -141,4 +146,6 @@ jobs:
             fork-regression.log
             worker/host-tests/shipped22-negative.log
             worker/lh-image-probe
+            worker/device-rollback/DeviceRollback-*
+            worker/device-compat/DeviceCompat-*
           if-no-files-found: warn

@@ -16,6 +16,20 @@ xcrun clang "${common[@]}" tests/thread-safety.c libhooker/mem/threadSafety.c \
 worker/host-tests/thread-safety
 xcrun clang "${common[@]}" tests/memory-backend.c -o worker/host-tests/memory-backend
 worker/host-tests/memory-backend
+for mode in legacy partial-patch partial-protect unavailable legacy-retry legacy-unavailable legacy-pinned; do
+    worker/host-tests/memory-backend "$mode"
+done
+xcrun clang "${common[@]}" tests/legacy-memory.c -o worker/host-tests/legacy-memory
+for mode in ready allocation-failure protection-failure overlapping-prepare; do
+    worker/host-tests/legacy-memory "$mode"
+done
+xcrun clang -target arm64-apple-ios15.0 -c libhooker/mem/legacy-syscalls.S \
+    -o worker/host-tests/legacy-syscalls-arm64.o
+if python3 -c 'import unicorn' >/dev/null 2>&1; then
+    python3 tests/legacy-writer.py worker/host-tests/legacy-syscalls-arm64.o
+else
+    printf 'SKIP optional ARM64 writer emulation: install Unicorn 2.1.2 to run tests/legacy-writer.py\n'
+fi
 xcrun clang "${common[@]}" tests/hook-resources.c -o worker/host-tests/hook-resources
 worker/host-tests/hook-resources
 xcrun clang "${common[@]}" tests/header-relay-mask.c -o worker/host-tests/header-relay-mask

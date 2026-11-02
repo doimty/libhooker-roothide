@@ -53,7 +53,7 @@ Missing, unreadable, corrupt or non-dictionary preferences preserve the prior lo
 
 The existing engine22 image-lookup fix and its tests remain in place. This integration changes plugin selection, not the Hook backend or the IOSurface fix. Host/build/package success must remain separate from later user-authorized app/UI/device acceptance. The currently functioning installed engine22 is not changed automatically.
 
-The legacy alternate-memory-backend and OldABI controls are not exposed as supported features. They do not have an equivalent implementation in this engine and must not appear to work merely because a preference was saved.
+The legacy alternate-memory-backend and OldABI UI controls remain unsupported. Engine revision `1.6.9-23+roothide.2` automatically selects a local COW backend only when both bootstrap memory exports are absent; this is not implementation of the old preference-driven alternate-backend control. No new backend/OldABI toggle is added, and saving those legacy preferences does not select a backend.
 
 ## Attribution
 
