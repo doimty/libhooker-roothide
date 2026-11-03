@@ -25,6 +25,7 @@ class ConfigViewController: UITableViewController {
     private var preferencesReady = false
     private var loading = false
     private var refreshPending = false
+    private var lastCompletedRefresh: TimeInterval = 0
     private var foregroundObserver: NSObjectProtocol?
     private let scanQueue = DispatchQueue(label: "libhooker.tweak-list", qos: .userInitiated)
 
@@ -47,18 +48,22 @@ class ConfigViewController: UITableViewController {
                                                                action: #selector(useInheritedConfiguration))
         }
         refreshControl = UIRefreshControl()
-        refreshControl?.addTarget(self, action: #selector(fetch), for: .valueChanged)
+        refreshControl?.addTarget(self, action: #selector(fetchFromPull), for: .valueChanged)
         foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                                     object: nil, queue: .main) { [weak self] _ in
             guard let self = self, self.isViewLoaded, self.view.window != nil,
                   self.navigationController?.topViewController === self else { return }
-            self.fetch()
+            self.fetch(force: false)
         }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        fetch()
+        fetch(force: false)
+    }
+
+    @objc private func fetchFromPull() {
+        fetch(force: true)
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int {
@@ -174,32 +179,30 @@ class ConfigViewController: UITableViewController {
         }
     }
 
-    // Both disk reads run off-main. Publish one complete snapshot and keep edits disabled until ready.
-    @objc private func fetch() {
+    // 两路磁盘读取都离开主线程；仅在首次读取期间禁用编辑，之后反复进入不再重排导航栏。
+    private func fetch(force: Bool) {
         guard !loading else { refreshPending = true; return }
+        let now = Date().timeIntervalSince1970
+        if !force, preferencesReady, now - lastCompletedRefresh < 2 { return }
         loading = true
-        preferencesReady = false
-        navigationItem.prompt = String(localizationKey: "Loading settings…")
-        navigationItem.rightBarButtonItem?.isEnabled = false
-        tableView.reloadData()
         var remaining = 2
         let finished: () -> Void = { [weak self] in
             remaining -= 1
             guard remaining == 0, let self = self else { return }
             self.loading = false
+            self.lastCompletedRefresh = Date().timeIntervalSince1970
             if self.refreshPending {
                 self.refreshPending = false
-                self.fetch()
+                self.fetch(force: false)
                 return
             }
-            self.navigationItem.prompt = nil
             self.navigationItem.rightBarButtonItem?.isEnabled = self.preferencesReady
             self.refreshControl?.endRefreshing()
             self.applySnapshot()
             self.tableView.reloadData()
         }
         LHUserDefaults.standard.reloadAsync { [weak self] success in
-            self?.preferencesReady = success
+            if success { self?.preferencesReady = true }
             finished()
         }
         let path = LHPaths.jailbreak("/usr/lib/TweakInject")

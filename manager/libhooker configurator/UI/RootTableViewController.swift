@@ -21,6 +21,7 @@ class RootTableViewController: BaseTableViewController {
     private var preferencesReady = false
     private var refreshing = false
     private var refreshPending = false
+    private var lastCompletedRefresh: TimeInterval = 0
     private var foregroundObserver: NSObjectProtocol?
 
     deinit {
@@ -39,43 +40,47 @@ class RootTableViewController: BaseTableViewController {
         }
         #endif
         refreshControl = UIRefreshControl()
-        refreshControl?.addTarget(self, action: #selector(refreshContent), for: .valueChanged)
+        refreshControl?.addTarget(self, action: #selector(refreshFromPull), for: .valueChanged)
         foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                                     object: nil, queue: .main) { [weak self] _ in
             guard let self = self, self.isViewLoaded, self.view.window != nil,
                   self.navigationController?.topViewController === self else { return }
-            self.refreshContent()
+            self.refreshContent(force: false)
         }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        refreshContent()
+        refreshContent(force: false)
     }
 
-    @objc private func refreshContent() {
+    @objc private func refreshFromPull() {
+        refreshContent(force: true)
+    }
+
+    // 反复进出页面时不再重排导航栏：去掉 prompt 横幅，也不再先清空表格。
+    private func refreshContent(force: Bool) {
         guard !refreshing else { refreshPending = true; return }
+        let now = Date().timeIntervalSince1970
+        if !force, preferencesReady, now - lastCompletedRefresh < 2 { return }
         refreshing = true
-        preferencesReady = false
-        navigationItem.prompt = String(localizationKey: "Loading settings…")
-        tableView.reloadData()
         var remaining = 2
         let finished: () -> Void = { [weak self] in
             remaining -= 1
             guard remaining == 0, let self = self else { return }
             self.refreshing = false
+            self.lastCompletedRefresh = Date().timeIntervalSince1970
             if self.refreshPending {
                 self.refreshPending = false
-                self.refreshContent()
+                self.refreshContent(force: false)
                 return
             }
             self.refreshControl?.endRefreshing()
-            self.navigationItem.prompt = nil
             self.tableView.reloadData()
         }
         DeviceInfo.shared.refreshPackagesList(completion: finished)
         LHUserDefaults.standard.reloadAsync { [weak self] success in
-            self?.preferencesReady = success
+            if success { self?.preferencesReady = true }
             finished()
         }
     }
